@@ -19,7 +19,8 @@ code in `../demo/` on 2026-10-16; the demo stays the place where new work is bui
 | `.env.example` | Backend settings template (server file: `.env`) | |
 | `dashboard.env.example` | Dashboard settings template (server file: `dashboard.env`) | |
 | `scripts/make-server-env.sh` | Builds `.env` and `dashboard.env` on the server from the old server `.env` | |
-| `Deployment-AWS-EC2.md` | Step-by-step deploy guide (also for a fresh EC2) | |
+| `Deployment-AWS-EC2.md` | Step-by-step deploy guide, plus making the server bigger (disk / RAM) | |
+| `Server-Commands-Explained.md` | What each server command does, in plain words | |
 
 ## How the pieces connect
 

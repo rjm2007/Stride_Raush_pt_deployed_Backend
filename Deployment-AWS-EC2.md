@@ -383,6 +383,60 @@ The old stack is deleted (owner's decision), so there is no switch back: fix for
 
 ---
 
+## 17. Make the server bigger (disk or RAM)
+
+Today: 2 GB RAM + 4 GB swap, 15 GB disk. That is enough for this setup (the five containers use well under
+1 GB when running). Check from time to time:
+
+```bash
+free -h                     # "available" should stay above ~300 MB; "Swap used" should stay low
+docker stats --no-stream    # memory per container
+df -h /                     # keep at least 3 GB "Avail"; run `docker image prune -f` after deploys
+```
+
+Grow the **disk** if `Avail` drops under 3 GB. Grow the **RAM** if `available` is often under 300 MB or swap
+use keeps rising outside builds.
+
+### 17a. Bigger disk (no downtime) [Browser + Server]
+
+1. **[Browser]** AWS Console → EC2 → Instances → the server → **Storage** tab → click the root volume id.
+2. **Actions → Modify volume** → Size `30` (GiB), type `gp3` → Modify → Modify. Wait until the state shows
+   `optimizing` or `completed` (a few minutes). The server keeps running.
+3. **[Server]** let Linux use the new space:
+
+```bash
+lsblk                                   # find the disk and partition, e.g. nvme0n1 and nvme0n1p1 (or xvda / xvda1)
+df -hT /                                # the "Type" column: ext4 (usual) or xfs
+sudo growpart /dev/nvme0n1 1            # disk name and partition NUMBER from lsblk (xvda: sudo growpart /dev/xvda 1)
+sudo resize2fs /dev/nvme0n1p1           # ext4; for xfs use: sudo xfs_growfs -d /
+df -h /                                 # Size now about 30G
+```
+
+### 17b. More RAM (about 2 minutes of downtime) [Browser + Server]
+
+Changing the instance type needs the server stopped and started. **Check the IP first:** a stop/start gives
+the server a new public IP unless it has an **Elastic IP**, and a new IP breaks `stride.aibolt.ai` until the
+DNS A record (Namecheap) is changed.
+
+1. **[Browser]** EC2 → **Elastic IPs**: is `34.225.188.32` listed and associated with this instance?
+   - **Yes:** the IP stays the same. Continue.
+   - **No:** stop here. Do this only when someone can update the Namecheap A record right after (or first
+     allocate an Elastic IP, associate it, and point the A record at it).
+2. **[Server]** stop calls cleanly: `cd ~/rpt-production && docker compose down`
+3. **[Browser]** EC2 → Instances → the server → **Instance state → Stop instance**. Wait for `Stopped`.
+4. **Actions → Instance settings → Change instance type** → `t3.medium` (4 GB RAM; about double the price
+   of `t3.small`) → Apply.
+5. **Instance state → Start instance**. Wait for `Running` and both status checks to pass.
+6. **[Mac]** `ssh stride`, then:
+
+```bash
+cd ~/rpt-production
+docker compose up -d
+docker compose ps
+free -h                     # Mem total now about 3.8Gi
+curl -s https://stride.aibolt.ai/ready; echo
+```
+
 ## Appendix. Security notes
 
 - `.env`, `dashboard.env` and the Google key exist only on the server (mode 600). Never commit, email or
