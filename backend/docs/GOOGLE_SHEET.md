@@ -62,6 +62,12 @@ After the last cadence step with no booking the lead moves to Closed.
 `Already booked` (no call): the same phone + name + birthday + case was marked Booked in the last 30 days.
 A different case (booked for Ortho, referred again for Pelvic) starts a new lead.
 
+## When a row is missing
+
+If the backend has an update for a lead whose row is gone (deleted, or Lead ID cleared), it tries 3 times
+(about 1 and 2 minutes apart, `SHEET_MAX_ATTEMPTS`) and then gives that update up. The lead itself is not
+affected; the dashboard stays correct.
+
 ## Edits to an existing row
 
 Name, Phone Number, Email, Date Of Birth, Location and Case edits on a linked row are synced every 5
