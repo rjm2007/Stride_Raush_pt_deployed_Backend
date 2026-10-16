@@ -1,0 +1,214 @@
+from rpt_agent.services.delivery import apply_twilio_message_status
+
+
+class _Result:
+    rowcount = 1
+
+    def __init__(self, one=None, many=None):
+        self.one = one
+        self.many = many if many is not None else ([] if one is None else [one])
+
+    def fetchone(self):
+        return self.one
+
+    def fetchall(self):
+        return self.many
+
+
+class _Connection:
+    def __init__(self):
+        self.queries = []
+
+    def execute(self, query, params):
+        self.queries.append((query, params))
+        if query.startswith("update sms_messages"):
+            return _Result({
+                "lead_id": "lead-1",
+                "outreach_event_id": 7,
+                "delivery_status": "delivered",
+                "failure_reason": None,
+            })
+        if "returning oe.id,oe.lead_id" in query:
+            return _Result({"id": 7, "lead_id": "lead-1"})
+        return _Result()
+
+
+def test_twilio_delivery_updates_are_durable_and_forward_only():
+    conn = _Connection()
+    matched = apply_twilio_message_status(
+        conn,
+        {"MessageSid": "SM-test", "MessageStatus": "delivered"},
+    )
+    assert matched == 3
+    assert len(conn.queries) == 5
+    assert all("status='delivered'" in query for query, _params in conn.queries[:3])
+    assert all(params[-1] == "SM-test" for _query, params in conn.queries[:3])
+    assert "update outreach_events" in conn.queries[3][0]
+    assert "destination" in conn.queries[4][0]
+
+
+def test_older_failed_callback_cannot_regress_a_delivered_outreach_event():
+    conn = _Connection()
+    apply_twilio_message_status(
+        conn,
+        {"MessageSid": "SM-test", "MessageStatus": "failed", "ErrorCode": "30001"},
+    )
+    event_params = conn.queries[3][1]
+    # The fake SMS update returns its already-forward delivery state. The event
+    # must follow that current database truth, not the older callback payload.
+    assert event_params[0] == "delivered"
+    assert event_params[1] == "delivered"
+
+
+def test_undelivered_cadence_sms_pauses_for_review():
+    class Connection(_Connection):
+        def execute(self, query, params):
+            self.queries.append((query, params))
+            if query.startswith("update sms_messages"):
+                return _Result({
+                    "lead_id": "lead-1",
+                    "outreach_event_id": 7,
+                    "delivery_status": "undelivered",
+                    "failure_reason": "30003",
+                })
+            if "returning oe.id,oe.lead_id" in query:
+                return _Result({"id": 7, "lead_id": "lead-1"})
+            return _Result()
+
+    conn = Connection()
+    apply_twilio_message_status(
+        conn,
+        {"MessageSid": "SM-test", "MessageStatus": "undelivered", "ErrorCode": "30003"},
+    )
+    review_queries = [query for query, _ in conn.queries if query.startswith("update leads set")]
+    assert len(review_queries) == 1
+    assert "needs_review=true" in review_queries[0]
+    assert "'paused'" in review_queries[0]
+    skip = [(query, params) for query, params in conn.queries if "status='skipped'" in query]
+    assert len(skip) == 1
+    assert skip[0][1][0] == "paused_for_review"
+    assert skip[0][1][1] == "lead-1"
+
+
+def _settle_with(monkeypatch, structured, turns=None):
+    """Run the post-call fallback on one extractor result; return the status
+    it applied, or "review" when the call went to staff instead."""
+    from contextlib import contextmanager
+
+    from rpt_agent.observability import WorkflowTrace
+    from rpt_agent.services import delivery, lead_status
+
+    applied = {}
+
+    class Conn:
+        def execute(self, sql, params=None):
+            if "needs_review=true" in sql or "outcome='manual'" in sql:
+                applied.setdefault("status", "review")
+            return self
+
+        def fetchone(self):
+            return {"outcome": applied.get("status")}
+
+        def fetchall(self):
+            return []
+
+    @contextmanager
+    def fake_transaction():
+        yield Conn()
+
+    def fake_report(trace, **kwargs):
+        applied["status"], applied["notes"] = kwargs["status"], kwargs["notes"]
+
+    monkeypatch.setattr(delivery, "transaction", fake_transaction)
+    monkeypatch.setattr(lead_status, "report_lead_status", fake_report)
+    message = {"artifact": {
+        "structuredOutputs": {"x": {"result": structured}},
+        "messages": [{"role": r, "message": m} for r, m in (turns or [])],
+    }}
+    delivery._settle_from_structured_output(
+        WorkflowTrace("t", "test"), message, lead_id="lead-1", event_id=1, call_id="c"
+    )
+    return applied
+
+
+def test_hang_up_with_no_decision_keeps_outreach_going(monkeypatch):
+    """Rohan hung up during the introduction. The extractor is told that is not
+    a refusal and leaves status out; that must count as a missed contact."""
+    applied = _settle_with(monkeypatch, {"summary": "Call ended during the introduction."})
+    assert applied["status"] == "no_answer"
+
+
+def test_extractor_refusal_and_opt_out_are_applied_with_their_note(monkeypatch):
+    answered = [("bot", "Am I speaking with Emma?"), ("user", "Yes."),
+                ("bot", "This is Sarah calling from Rausch. Is now a good time?"),
+                ("user", "No, I'm all set.")]
+    applied = _settle_with(monkeypatch, {"status": "declined", "summary": "Said she is all set."}, answered)
+    assert applied == {"status": "declined", "notes": "Said she is all set."}
+    assert _settle_with(monkeypatch, {"status": "do_not_contact"}, answered)["status"] == "do_not_contact"
+
+
+DEVYANSH = [  # 26 Sep, 10:47 PM: "Yes", then silence until the call timed out
+    ("user", "Hello?"),
+    ("bot", "Hi. Am I speaking with Devianch Chaudhary?"),
+    ("user", "Yes."),
+    ("bot", ("Great. This is Sarah calling from Rausch Physical Therapy and Wellness. "
+             "Is this a convenient time to speak?")),
+    ("bot", "Are you still there?"),
+    ("bot", "Are you still there?"),
+]
+
+
+def test_silence_after_the_introduction_is_never_a_refusal(monkeypatch):
+    """Gemini read this call as "declined" despite the extractor's rules. The
+    patient never answered anything after Sarah said why she was calling."""
+    applied = _settle_with(
+        monkeypatch,
+        {"status": "declined", "summary": "The patient did not respond."},
+        DEVYANSH,
+    )
+    assert applied["status"] == "no_answer"
+    assert "The patient did not respond." in applied["notes"]  # evidence kept
+
+
+def test_opt_out_said_before_the_introduction_is_still_honoured(monkeypatch):
+    early = [("bot", "Hi. Am I speaking with Devyansh?"), ("user", "Stop calling me.")]
+    assert _settle_with(monkeypatch, {"status": "do_not_contact"}, early)["status"] == "do_not_contact"
+
+
+def test_failed_extraction_goes_to_staff(monkeypatch):
+    """An empty object is what an extraction that ran out of tokens returns."""
+    assert _settle_with(monkeypatch, {})["status"] == "review"
+
+
+def test_sent_without_delivery_receipt_settles_the_step():
+    """Olivia's carrier never returned a delivery receipt: Twilio stayed at
+    "sent", the step stayed attempted, and the cadence froze behind it."""
+    from rpt_agent.services.delivery import apply_twilio_message_status
+
+    class Result:
+        def __init__(self, one=None):
+            self.one, self.rowcount = one, 1
+
+        def fetchone(self):
+            return self.one
+
+    class Conn:
+        def __init__(self):
+            self.queries = []
+
+        def execute(self, sql, params=None):
+            self.queries.append((" ".join(sql.split()), params))
+            if sql.startswith("update sms_messages"):
+                return Result({"lead_id": "lead-1", "outreach_event_id": 7,
+                               "delivery_status": "sent", "failure_reason": None})
+            if "returning oe.id,oe.lead_id" in sql:
+                return Result({"id": 7, "lead_id": "lead-1"})
+            return Result()
+
+    conn = Conn()
+    apply_twilio_message_status(conn, {"MessageSid": "SM-1", "MessageStatus": "sent"})
+    settle = [(q, p) for q, p in conn.queries if q.startswith("update outreach_events oe")]
+    assert settle, "a sent text must settle its cadence step"
+    assert "when %s in ('sent','delivered') then 'delivered'" in settle[0][0]
+    assert settle[0][1][0] == "sent"
+    assert not any("needs_review=true" in q for q, _ in conn.queries)

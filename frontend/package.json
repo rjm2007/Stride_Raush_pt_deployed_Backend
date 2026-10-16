@@ -1,0 +1,36 @@
+{
+  "name": "rpt-dashboard-production",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint . --ignore-pattern .next",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test app/display.test.ts app/cadence.test.ts app/session.test.ts app/dashboard-client.test.ts app/dashboard-origin.test.ts",
+    "test:display": "node --experimental-strip-types --test app/display.test.ts",
+    "test:cadence": "node --experimental-strip-types --test app/cadence.test.ts",
+    "test:auth": "node --experimental-strip-types --test app/session.test.ts",
+    "test:dashboard": "node --experimental-strip-types --test app/dashboard-client.test.ts"
+  },
+  "dependencies": {
+    "next": "16.3.8",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.2.1",
+    "@types/node": "22.19.19",
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "eslint": "9.39.4",
+    "eslint-config-next": "16.2.6",
+    "tailwindcss": "4.2.1",
+    "typescript": "5.9.3"
+  },
+  "type": "module"
+}

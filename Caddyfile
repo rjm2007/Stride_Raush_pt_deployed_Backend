@@ -1,0 +1,37 @@
+# The domain whose DNS A record points at this server. Caddy gets and renews the HTTPS
+# certificate by itself (ports 80 and 443 must be open). After editing this file run:
+#   docker compose up -d --force-recreate caddy
+stride.aibolt.ai {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# The dashboard reaches the backend's dashboard API inside Docker (http://api:8000), so
+	# nobody outside needs this path. If the dashboard is ever hosted elsewhere (Vercel), remove
+	# this block.
+	handle /api/v1/dashboard/* {
+		respond 404
+	}
+
+	# Backend: Vapi and Twilio webhooks, the voice agent's tool, health checks.
+	@backend path /api/v1/* /health /ready
+	handle @backend {
+		# While the API restarts (a deploy), hold requests for up to 15 s instead of
+		# answering 502: under Vapi's 20 s tool timeout, so a live call rides through.
+		reverse_proxy api:8000 {
+			lb_try_duration 15s
+			lb_try_interval 250ms
+		}
+	}
+
+	# Everything else is the staff dashboard (login, board, leads, admin).
+	handle {
+		reverse_proxy dashboard:3000 {
+			lb_try_duration 15s
+			lb_try_interval 250ms
+		}
+	}
+}

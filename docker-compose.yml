@@ -1,0 +1,109 @@
+# Production stack for Rausch PT outreach (cadence only: Google Sheet + dashboard, no Stride/Keap).
+# One server, one domain. From this folder on the server:
+#   docker compose build
+#   docker compose run --rm api rpt migrate
+#   docker compose up -d
+# See Deployment-AWS-EC2.md.
+
+x-logging: &logging
+  # Rotate container logs so they can never fill the disk.
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  api:
+    build: ./backend
+    image: rpt-backend:latest
+    container_name: rpt-api
+    restart: unless-stopped
+    env_file: .env
+    # Concurrent call webhooks run in parallel threads; 3 connections would queue them.
+    environment:
+      DB_POOL_MAX_SIZE: "10"
+    expose:
+      - "8000"
+    # Let an in-flight webhook finish before a deploy stops the container.
+    stop_grace_period: 30s
+    volumes:
+      - ./logs:/app/logs
+    logging: *logging
+    # Liveness only: /ready also checks config and the database and is for humans.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # Exactly one worker: it places every call and text, and its rate limits live in this process.
+  worker:
+    image: rpt-backend:latest
+    pull_policy: never  # built by the api service above; never pulled from a registry
+    container_name: rpt-worker
+    restart: unless-stopped
+    env_file: .env
+    command: rpt-worker
+    depends_on:
+      api:
+        condition: service_started
+    volumes:
+      - ./logs:/app/logs
+    logging: *logging
+
+  # Reads the Google Sheet (new leads, commands, edits) and writes results back into it with
+  # the Google service account key mounted read-only below. Separate from the worker so a slow
+  # Google request can never delay a call or a text.
+  sheet-worker:
+    image: rpt-backend:latest
+    pull_policy: never  # built by the api service above; never pulled from a registry
+    container_name: rpt-sheet-worker
+    restart: unless-stopped
+    env_file: .env
+    command: rpt-sheet-worker
+    depends_on:
+      api:
+        condition: service_started
+    volumes:
+      - ./logs:/app/logs
+      - /home/ubuntu/rpt-secrets/google-sheet-sa.json:/run/secrets/google-sheet-sa.json:ro
+    logging: *logging
+
+  # Staff dashboard (Next.js). It talks to the backend inside this Docker network.
+  dashboard:
+    build: ./frontend
+    image: rpt-dashboard:latest
+    container_name: rpt-dashboard
+    restart: unless-stopped
+    env_file: dashboard.env
+    environment:
+      DASHBOARD_API_ORIGIN: http://api:8000
+    expose:
+      - "3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    logging: *logging
+
+  caddy:
+    image: caddy:2.11.4-alpine
+    container_name: rpt-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+      dashboard:
+        condition: service_started
+    logging: *logging
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,124 @@
+[
+  {
+    "id": "282775d1-6d02-454a-92ad-dd72fb725456",
+    "type": "transferCall",
+    "function": {
+      "name": "transfer_tool_outreach",
+      "description": "Connect the patient to a live team member. Use it the moment the patient asks for a person, the team, the office or the front desk, or asks a clinic question (price, insurance, services, locations, therapists). Call the lead-status tool with transferred_human in the same turn."
+    },
+    "messages": [
+      {
+        "type": "request-start",
+        "blocking": false
+      }
+    ],
+    "destinations": [
+      {
+        "type": "number",
+        "number": "+19492765401",
+        "message": "As per your request, I am now transferring your call to one of our team members for further assistance. Thank you for your time, and please stay on the line.",
+        "description": "Transfer to a human agent",
+        "transferPlan": {
+          "mode": "blind-transfer",
+          "sipVerb": "refer"
+        },
+        "numberE164CheckEnabled": true
+      }
+    ],
+    "latestVersion": "v2"
+  },
+  {
+    "id": "bec061ea-4558-4b8f-8a33-df96bde268ab",
+    "type": "function",
+    "function": {
+      "name": "update_lead_status",
+      "strict": true,
+      "description": "Record the outcome of this call for the clinic. Call it exactly once per decision, in the same turn as the closing line (or the transfer). Do not call it for voicemail or silence.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "notes": {
+            "description": "One or two plain sentences on what happened. No medical details.",
+            "type": "string"
+          },
+          "status": {
+            "description": "The patient's decision. do_not_contact whenever the patient asks us to stop calling or not to contact them; declined only for 'not interested' without such a request.",
+            "type": "string",
+            "enum": [
+              "booking_link",
+              "callback_scheduled",
+              "transferred_human",
+              "declined",
+              "do_not_contact",
+              "wrong_person",
+              "no_answer"
+            ]
+          },
+          "callback_type": {
+            "description": "callback_scheduled only: relative for a number of minutes or hours from now, absolute for a clock time or day. Otherwise empty.",
+            "type": "string",
+            "enum": [
+              "relative",
+              "absolute",
+              ""
+            ]
+          },
+          "delay_minutes": {
+            "description": "callback_type relative only: whole minutes agreed, for example 10. Otherwise empty.",
+            "type": "string"
+          },
+          "callback_datetime_iso": {
+            "description": "callback_type absolute only: agreed time as ISO 8601 in America/Los_Angeles, for example 2026-10-08T09:00:00-07:00. Otherwise empty.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "notes",
+          "callback_type",
+          "delay_minutes",
+          "callback_datetime_iso"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "messages": [
+      {
+        "type": "request-start",
+        "blocking": false
+      }
+    ],
+    "server": {
+      "url": "https://stride.aibolt.ai/api/v1/webhooks/vapi/lead-status",
+      "timeoutSeconds": 20,
+      "headers": {
+        "X-Vapi-Secret": "<secret: set in Vapi, same value as VAPI_WEBHOOK_SECRET>"
+      },
+      "credentialId": "ae6a9f25-b7fc-4a16-a7a2-ce7cc6178ac1",
+      "staticIpAddressesEnabled": false
+    },
+    "async": true,
+    "variableExtractionPlan": {
+      "schema": {
+        "type": "object",
+        "required": [],
+        "properties": {}
+      }
+    },
+    "parameters": [
+      {
+        "key": "lead_id",
+        "value": "{{ lead_id }}"
+      },
+      {
+        "key": "outreach_event_id",
+        "value": "{{ outreach_event_id }}"
+      },
+      {
+        "key": "call_id",
+        "value": "{{ call.id }}"
+      }
+    ],
+    "latestVersion": "v8"
+  }
+]

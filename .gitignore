@@ -1,0 +1,20 @@
+# Secrets: never commit. The server's real values live only in these files on the server.
+.env
+.env.*
+!.env.example
+dashboard.env
+!dashboard.env.example
+secrets/
+*.pem
+*.key
+*.json.key
+google-sheet-sa*.json
+
+# Runtime output on the server
+logs/
+
+# Local tooling
+.DS_Store
+.vscode/
+.idea/
+.claude/
