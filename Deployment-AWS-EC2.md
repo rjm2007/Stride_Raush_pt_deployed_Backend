@@ -294,7 +294,11 @@ until the demo has its own server (its tools also point at this domain).
 
 ## 13. Turn calls and texts on, then test with your own phone [Server + Browser]
 
-Test in testing mode (one minute per cadence day, any time of day), then switch to real mode:
+Test in testing mode (one minute per cadence day, any time of day), then switch to real mode. First
+put the test numbers in `.env` (`nano .env`): `TEST_TWILIO_ACCOUNT_SID`, `TEST_TWILIO_AUTH_TOKEN`,
+`TEST_TWILIO_FROM_NUMBER`, `TEST_VAPI_PHONE_NUMBER_ID`. While testing mode is on, every call and text uses
+them; with it off, the live number is used. In the **test** Twilio account, point the test number's
+Messaging webhook at `https://stride.aibolt.ai/api/v1/twilio/inbound-sms` too.
 
 ```bash
 cd ~/rpt-production

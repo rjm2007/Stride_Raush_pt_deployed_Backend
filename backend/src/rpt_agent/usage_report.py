@@ -69,10 +69,11 @@ def refresh_provider_usage() -> None:
                 price = _cost(data.get("cost"))
                 currency = "USD" if price is not None else None
             else:
+                account_sid, auth_token, _ = settings.twilio_account()
                 response = client.get(
                     f"https://api.twilio.com/2010-04-01/Accounts/"
-                    f"{settings.twilio_account_sid}/Messages/{row['provider_ref']}.json",
-                    auth=(settings.twilio_account_sid, settings.twilio_auth_token),
+                    f"{account_sid}/Messages/{row['provider_ref']}.json",
+                    auth=(account_sid, auth_token),
                 )
                 response.raise_for_status()
                 data = response.json()

@@ -127,3 +127,6 @@ here (the schema already matches).
 - `make-server-env.sh` also copies `GOOGLE_SHEET_ID` from the old server `.env`.
 - Repo: github.com/rjm2007/Stride_Raush_pt_deployed_Backend. Cutover plan: same EC2 and domain, old stack
   deleted (owner's decision), current Sheet + service account for now (old rows moved to another tab first).
+- Test numbers: `TEST_TWILIO_ACCOUNT_SID/AUTH_TOKEN/FROM_NUMBER` and `TEST_VAPI_PHONE_NUMBER_ID`. In testing
+  mode every text and call goes from them (the test Vapi id beats `practice_settings`); off = live number.
+  Twilio webhook signatures are checked against both accounts' tokens.

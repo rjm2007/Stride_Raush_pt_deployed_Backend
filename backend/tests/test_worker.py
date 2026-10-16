@@ -297,3 +297,13 @@ def test_call_sends_the_variables_the_outreach_agent_reads():
         "booking_link": "https://book.example.test", "day_offset": 0,
     }
     assert (sent["assistantId"], sent["phoneNumberId"]) == ("assistant", "phone")
+
+
+def test_testing_mode_vapi_number_wins_over_the_database_setting():
+    import inspect
+
+    from rpt_agent import worker
+
+    source = inspect.getsource(worker.claim_jobs)
+    first = source.index("testing_vapi_phone_number_id()")
+    assert first < source.index('context["vapi_phone_number_id"]')

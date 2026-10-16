@@ -122,11 +122,11 @@ async def require_vapi_auth(request: Request) -> None:
 async def require_twilio_auth(request: Request, form: dict[str, str]) -> None:
     """Validate Twilio's HMAC-SHA1 request signature."""
     settings = get_settings()
-    auth_token = settings.twilio_auth_token
+    tokens = settings.twilio_auth_tokens()  # live and test account
     signature = request.headers.get("x-twilio-signature", "")
     if settings.mode("twilio") == "mock" and signature == "mock-valid":
         return
-    if not auth_token or not signature:
+    if not tokens or not signature:
         raise HTTPException(status_code=401, detail="missing Twilio signature")
     if settings.public_base_url:
         public_url = f"{settings.public_base_url.rstrip('/')}{request.url.path}"
@@ -135,6 +135,8 @@ async def require_twilio_auth(request: Request, form: dict[str, str]) -> None:
     else:
         public_url = str(request.url)
     data = public_url + "".join(f"{key}{form[key]}" for key in sorted(form))
-    digest = base64.b64encode(hmac.new(auth_token.encode(), data.encode(), hashlib.sha1).digest()).decode()
-    if not hmac.compare_digest(digest, signature):
-        raise HTTPException(status_code=401, detail="invalid Twilio signature")
+    for token in tokens:
+        digest = base64.b64encode(hmac.new(token.encode(), data.encode(), hashlib.sha1).digest()).decode()
+        if hmac.compare_digest(digest, signature):
+            return
+    raise HTTPException(status_code=401, detail="invalid Twilio signature")

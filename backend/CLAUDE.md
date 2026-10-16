@@ -81,7 +81,10 @@ Deploy: see `../Deployment-AWS-EC2.md` (server, `docker compose`, `.env`).
 - **Testing switch**: `TESTING_MODE=true` makes every lead the Sheet creates an `is_test` lead; for those the
   cadence day is `TESTING_DAY_MINUTES` (1) and `CLAIM_SQL` skips calling hours and daily limits. Leads keep
   the mode they were created in. Allowed in production (it is how the live server is tested); the worker
-  logs `testing_mode_on`, `/ready` and the dashboard snapshot report it.
+  logs `testing_mode_on`, `/ready` and the dashboard snapshot report it. With `TEST_TWILIO_*` and
+  `TEST_VAPI_PHONE_NUMBER_ID` set, testing mode also sends every text and call from the test numbers
+  (`Settings.twilio_account()`, `testing_vapi_phone_number_id()`, which beats the database value); Twilio
+  webhooks verify with either account's token.
 - **Idempotency**: provider callbacks dedupe on provider IDs; Sheet commands dedupe on the row's Action
   Request ID (`lead_action_requests`).
 - **Roles**: dashboard requests carry `X-Dashboard-User-ID/Name/Role` plus the server token; `super_admin`

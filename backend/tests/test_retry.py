@@ -141,3 +141,30 @@ def test_production_assistant_requires_phi_approval_evidence():
     assert "LangChain/LangSmith tracing must be disabled for the assistant" in (
         traced.runtime_errors("api")
     )
+
+
+def test_testing_mode_switches_to_the_test_numbers_and_back():
+    base = {"_env_file": None, "twilio_account_sid": "AClive", "twilio_auth_token": "live-token",
+            "twilio_from_number": "+15550000001", "vapi_phone_number_id": "live-phone",
+            "test_twilio_account_sid": "ACtest", "test_twilio_auth_token": "test-token",
+            "test_twilio_from_number": "+15550000002", "test_vapi_phone_number_id": "test-phone"}
+    testing = Settings(**base, testing_mode=True)
+    assert testing.twilio_account() == ("ACtest", "test-token", "+15550000002")
+    assert testing.testing_vapi_phone_number_id() == "test-phone"
+    live = Settings(**base, testing_mode=False)
+    assert live.twilio_account() == ("AClive", "live-token", "+15550000001")
+    assert live.testing_vapi_phone_number_id() is None
+    # Webhooks verify with either account's token, so a mode switch never rejects a callback.
+    assert set(live.twilio_auth_tokens()) == {"live-token", "test-token"}
+
+
+def test_testing_mode_without_test_numbers_keeps_the_live_ones():
+    settings = Settings(_env_file=None, testing_mode=True, twilio_account_sid="AClive",
+                        twilio_auth_token="t", twilio_from_number="+15550000001")
+    assert settings.twilio_account() == ("AClive", "t", "+15550000001")
+    assert settings.testing_vapi_phone_number_id() is None
+
+
+def test_test_twilio_values_must_come_together():
+    settings = Settings(_env_file=None, test_twilio_account_sid="ACtest")
+    assert any("must be set together" in e for e in settings.runtime_errors("api"))

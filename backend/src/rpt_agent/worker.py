@@ -296,7 +296,8 @@ def claim_jobs(trace: WorkflowTrace, limit: int = 20) -> list[Job]:
                 row["id"], str(row["lead_id"]), row["channel"], context["phone_e164"],
                 context["full_name"], context["body"], context["booking_link_url"], row["day_offset"],
                 context["vapi_assistant_id"] or get_settings().vapi_assistant_id,
-                context["vapi_phone_number_id"] or get_settings().vapi_phone_number_id,
+                get_settings().testing_vapi_phone_number_id()
+                or context["vapi_phone_number_id"] or get_settings().vapi_phone_number_id,
                 row["attempt_no"],
             ))
     trace.log("database_operation_completed", operation="claim_due_events", job_count=len(jobs))

@@ -84,6 +84,13 @@ class Settings(BaseSettings):
     # they were created in; delete the test leads before real patients come in.
     testing_mode: bool = False
     testing_day_minutes: int = Field(default=1, ge=1, le=1440)
+    # Test phone numbers, used for every call and text while TESTING_MODE is on (when set). With
+    # TESTING_MODE off the live TWILIO_* / VAPI_PHONE_NUMBER_ID (and the database's practice
+    # settings) are used as always.
+    test_twilio_account_sid: str = ""
+    test_twilio_auth_token: str = ""
+    test_twilio_from_number: str = ""
+    test_vapi_phone_number_id: str = ""
     mock_scenario: str = "success"
     request_timeout_seconds: float = 10.0
     db_pool_timeout_seconds: float = 5.0
@@ -96,6 +103,24 @@ class Settings(BaseSettings):
     retry_max_attempts: int = Field(default=5, ge=1, le=20)
     retry_base_seconds: int = Field(default=60, ge=1, le=3600)
     retry_max_seconds: int = Field(default=3600, ge=1, le=86400)
+
+    def _testing_twilio(self) -> bool:
+        return self.testing_mode and bool(self.test_twilio_account_sid)
+
+    def twilio_account(self) -> tuple[str, str, str]:
+        """(account sid, auth token, from number) for sending: the test account in testing mode."""
+        if self._testing_twilio():
+            return self.test_twilio_account_sid, self.test_twilio_auth_token, self.test_twilio_from_number
+        return self.twilio_account_sid, self.twilio_auth_token, self.twilio_from_number
+
+    def twilio_auth_tokens(self) -> list[str]:
+        """Tokens a Twilio webhook may be signed with: both accounts, so callbacks for texts sent
+        before a mode switch still verify."""
+        return [t for t in (self.twilio_auth_token, self.test_twilio_auth_token) if t]
+
+    def testing_vapi_phone_number_id(self) -> str | None:
+        """In testing mode the test Vapi number wins over .env and the database setting."""
+        return (self.test_vapi_phone_number_id or None) if self.testing_mode else None
 
     def mode(self, provider: str) -> str:
         override = getattr(self, f"{provider}_mode", None)
@@ -197,6 +222,11 @@ class Settings(BaseSettings):
                 errors.append("GOOGLE_SHEET_CREDENTIALS_FILE does not point to a readable key file")
             if not self.practice_slug.strip():
                 errors.append("PRACTICE_SLUG is required when Sheet sync is enabled")
+        test_twilio = [self.test_twilio_account_sid, self.test_twilio_auth_token,
+                       self.test_twilio_from_number]
+        if any(test_twilio) and not all(test_twilio):
+            errors.append("TEST_TWILIO_ACCOUNT_SID, TEST_TWILIO_AUTH_TOKEN and TEST_TWILIO_FROM_NUMBER "
+                          "must be set together")
         if self.retry_max_seconds < self.retry_base_seconds:
             errors.append("RETRY_MAX_SECONDS must be greater than or equal to RETRY_BASE_SECONDS")
         return errors

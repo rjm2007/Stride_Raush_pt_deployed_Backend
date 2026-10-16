@@ -106,6 +106,28 @@ def test_real_twilio_message_includes_public_status_callback():
     )
 
 
+def test_testing_mode_texts_from_the_test_twilio_account():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["url"] = str(request.url)
+        seen["form"] = dict(item.split("=", 1) for item in request.content.decode().split("&"))
+        seen["auth"] = request.headers.get("authorization")
+        return httpx.Response(201, json={"sid": "SM-test"})
+
+    settings = Settings(
+        provider_mode="mock", twilio_mode="real", testing_mode=True,
+        twilio_account_sid="AC-live", twilio_auth_token="live", twilio_from_number="+15005550006",
+        test_twilio_account_sid="AC-test", test_twilio_auth_token="test",
+        test_twilio_from_number="+15005550009",
+    )
+    clients = ProviderClients(settings, httpx.Client(transport=httpx.MockTransport(handler)))
+    clients.send_sms(WorkflowTrace("provider", "test", "trace"), "+15555550123", "hi")
+    assert seen["url"].endswith("/Accounts/AC-test/Messages.json")
+    assert seen["form"]["From"] == "%2B15005550009"
+    assert seen["auth"].startswith("Basic ")
+
+
 def test_rate_limit_is_retried_when_provider_rejected_request(monkeypatch):
     attempts = 0
 
