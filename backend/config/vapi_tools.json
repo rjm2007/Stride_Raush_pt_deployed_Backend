@@ -42,10 +42,11 @@
             "type": "string"
           },
           "status": {
-            "description": "The patient's decision. do_not_contact whenever the patient asks us to stop calling or not to contact them; declined only for 'not interested' without such a request.",
+            "description": "The patient's decision. do_not_contact whenever the patient asks us to stop calling or not to contact them; declined only for 'not interested' without such a request. booking_link_and_transfer when the patient wants the booking link texted AND to be connected to a person now (report it once, then start the transfer).",
             "type": "string",
             "enum": [
               "booking_link",
+              "booking_link_and_transfer",
               "callback_scheduled",
               "transferred_human",
               "declined",
@@ -119,6 +120,6 @@
         "value": "{{ call.id }}"
       }
     ],
-    "latestVersion": "v8"
+    "latestVersion": "v9"
   }
 ]
