@@ -22,7 +22,7 @@ and `src/rpt_agent/services/sheet_direct.py` (rules and labels).
 | `Location` | staff | for Start | clinic name, e.g. Laguna Niguel |
 | `Case` | staff | for Start | free text, e.g. Ortho, Pelvic ("Ortho" = "Physical Therapy" by case aliases) |
 | `Action` | staff | yes | dropdown: `Start cadence`, `Restart cadence`, `Do Not Contact`, `Booked` |
-| `Lead Status` | backend | | the dashboard column: New / In cadence / Paused / Needs Review / Booked / Do not outreach / Closed |
+| `Lead Status` | backend | | the dashboard column: New / In cadence / Paused / Needs Review / Booked / Do not outreach / Closed. If the cell has a dropdown, it must list all seven, or Google marks the value as invalid. Closed = 14 days done with no booking, patient not interested, or wrong number |
 | `Cadence Day` | backend | | |
 | `Outcome Status` | backend | yes | result of the last command (see below). Clear it to run a command again |
 | `Call Outcome` | backend | | |

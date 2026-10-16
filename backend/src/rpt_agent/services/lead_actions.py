@@ -378,7 +378,8 @@ def _restart_cadence(
         raise LeadActionError(
             409,
             "restart_not_allowed",
-            "A Do Not Contact or invalid-phone lead cannot be restarted",
+            "An invalid phone lead cannot be restarted" if lead["status"] == "invalid_phone"
+            else "A Do Not Contact lead cannot be restarted",
             lead_id=str(lead_id),
         )
     # Booked may be restarted: a mis-clicked Booked needs an undo, and marking

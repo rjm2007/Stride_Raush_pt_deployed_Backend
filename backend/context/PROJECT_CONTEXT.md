@@ -130,3 +130,13 @@ here (the schema already matches).
 - Test numbers: `TEST_TWILIO_ACCOUNT_SID/AUTH_TOKEN/FROM_NUMBER` and `TEST_VAPI_PHONE_NUMBER_ID`. In testing
   mode every text and call goes from them (the test Vapi id beats `practice_settings`); off = live number.
   Twilio webhook signatures are checked against both accounts' tokens.
+
+### 2026-10-16 — Wrong-number leads can be resumed; clearer refusals
+
+- A "wrong number" call sets `invalid_phone`, pauses the lead and flags it for review. Resume on the
+  dashboard refused it ("terminal leads cannot resume cadence") and Sheet Restart refuses `invalid_phone`,
+  so the lead was stuck. Resume now means staff confirmed the number: status back to `in_progress`, review
+  cleared, paused steps restored. Booked, declined and Do Not Contact still refuse, each with its own reason.
+- Sheet Restart refusal names the real reason ("An invalid phone lead…" / "A Do Not Contact lead…").
+- The Sheet's Lead Status already writes `Closed` for a finished cadence, a declined patient and a confirmed
+  wrong number; the Lead Status dropdown in the Sheet must list it (with New and Paused).

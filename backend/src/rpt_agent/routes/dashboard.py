@@ -712,6 +712,13 @@ def dashboard_lead(lead_id: UUID, actor: Actor):
     }
 
 
+RESUME_REFUSED = {
+    "booked": "A booked lead cannot be resumed",
+    "declined": "This patient declined; the cadence cannot be resumed",
+    "do_not_contact": "A Do Not Contact lead cannot be resumed",
+}
+
+
 @router.post("/leads/{lead_id}/cadence")
 def update_lead_cadence(lead_id: UUID, payload: CadenceAction, actor: Actor):
     with transaction() as conn:
@@ -720,11 +727,25 @@ def update_lead_cadence(lead_id: UUID, payload: CadenceAction, actor: Actor):
         ).fetchone()
         if not lead:
             raise HTTPException(status_code=404, detail="lead not found")
-        if payload.action == "resume" and lead["status"] in {
-            "booked", "declined", "do_not_contact", "invalid_phone"
-        }:
-            raise HTTPException(status_code=409, detail="terminal leads cannot resume cadence")
+        if payload.action == "resume" and lead["status"] in RESUME_REFUSED:
+            raise HTTPException(status_code=409, detail=RESUME_REFUSED[lead["status"]])
         new_state = "paused" if payload.action == "pause" else "active"
+        if payload.action == "resume" and lead["status"] == "invalid_phone":
+            # "Wrong number" pauses the lead for review. Resuming it is staff saying the number
+            # is right after all (2026-10-16: a patient said "wrong number" and the lead was
+            # stuck, since Resume refused it and Restart refuses invalid_phone).
+            conn.execute(
+                "update leads set status='in_progress',needs_review=false,review_reason=null,"
+                "review_resolved_at=case when needs_review then now() else review_resolved_at end,"
+                "status_reason='number confirmed by staff',status_changed_at=now() where id=%s",
+                (lead_id,),
+            )
+            conn.execute(
+                "insert into lead_status_history(lead_id,from_status,to_status,source,reason) "
+                "values(%s,'invalid_phone','in_progress','dashboard','number confirmed by staff, "
+                "cadence resumed')",
+                (lead_id,),
+            )
         shifted = 0
         if payload.action == "pause":
             # Soft cadence_state alone is not enough when a remote worker is stale;
