@@ -301,7 +301,7 @@ function renderPage(path: string, view: string | null, query: string | null, sta
   if (path === '/review') return <ReviewPage snapshot={snapshot} action={action} onResolved={onReviewResolved} loading={loading} />;
   if (path === '/analytics') return <AnalyticsPage snapshot={snapshot} loading={loading} />;
   if (path.startsWith('/administration') && role !== 'super_admin') return <Empty title="Administrator access required" body="Team members can manage every lead, while organization-wide settings stay protected." />;
-  if (path === '/administration') return <AdministrationPage snapshot={snapshot} />;
+  if (path === '/administration') return <AdministrationPage snapshot={snapshot} action={action} />;
   if (path === '/administration/cadence') return <GlobalCadencePage snapshot={snapshot} action={action} loading={loading} />;
   if (path === '/administration/templates') return <TemplateStudio snapshot={snapshot} action={action} onPublished={onTemplatePublished} />;
   if (/^\/leads\/[0-9a-f-]+\/conversations\/sms$/i.test(path)) return <LeadFrame detail={leadDetail!} tab="conversations" action={action} role={role}><SmsPage detail={leadDetail!} action={action} /></LeadFrame>;
@@ -494,14 +494,70 @@ function AnalyticsPage({ snapshot, loading }: { snapshot: Snapshot; loading: boo
     <Panel title="Operational indicators"><div className="metric-grid"><Stat label="Total leads" value={String(total)} trend={`${snapshot.counts.closed} closed`} /><Stat label="SMS sent" value={num(m?.messages_sent)} trend={`${num(m?.messages_delivered)} confirmed delivered`} /><Stat label="SMS awaiting confirmation" value={num(m?.messages_pending)} trend={m?.messages_failed ? `${m.messages_failed} failed` : "none failed"} /><Stat label="Calls completed" value={num(m?.calls_completed)} trend={pct(m?.calls_completion_rate)} /><Stat label="Review rate" value={pct(m?.review_rate)} trend={`${snapshot.counts.attention} of ${total}`} /></div></Panel></>;
 }
 
-function AdministrationPage({ snapshot }: { snapshot: Snapshot }) {
+function AdministrationPage({ snapshot, action }: { snapshot: Snapshot; action: DashboardAction }) {
   const cards = [
     ['/administration/cadence','CD','Global Cadence Studio','Edit the outreach sequence future leads receive.'],
     ['/administration/templates','SM','SMS Template Studio','Manage reusable SMS templates and global cadence messages.'],
     ['/review','RV','Review & Reconciliation','Resolve uncertain outreach results before trying again.'],
     ['/analytics','AU','Audit & Reporting','Monitor activity, delivery, and operational results.'],
   ];
-  return <><PageTitle title="Administration" subtitle="Manage organization-wide outreach settings." /><div className="admin-grid">{cards.map(([href,icon,title,body]) => <Link className="admin-card" href={href} key={href}><b>{icon}</b><div><h2>{title}</h2><p>{body}</p></div><span>→</span></Link>)}</div><Alert>Configuration changes are authenticated and recorded in the audit log. DNC rules cannot be bypassed.</Alert><div className="metric-grid"><Stat label="Cadence steps" value={String(snapshot.cadence.length)} /><Stat label="SMS templates" value={String(snapshot.templates.length)} /><Stat label="Review queue" value={String(snapshot.system.review_queue ?? 0)} /><Stat label="Pending updates" value={String(snapshot.system.provider_queue ?? 0)} /></div></>;
+  return <><PageTitle title="Administration" subtitle="Manage organization-wide outreach settings." /><div className="admin-grid">{cards.map(([href,icon,title,body]) => <Link className="admin-card" href={href} key={href}><b>{icon}</b><div><h2>{title}</h2><p>{body}</p></div><span>→</span></Link>)}</div><Alert>Configuration changes are authenticated and recorded in the audit log. DNC rules cannot be bypassed.</Alert><div className="metric-grid"><Stat label="Cadence steps" value={String(snapshot.cadence.length)} /><Stat label="SMS templates" value={String(snapshot.templates.length)} /><Stat label="Review queue" value={String(snapshot.system.review_queue ?? 0)} /><Stat label="Pending updates" value={String(snapshot.system.provider_queue ?? 0)} /></div><BlockedNumbersPanel action={action} /></>;
+}
+
+type BlockedNumber = {
+  phone: string;
+  reason: string | null;
+  source: string | null;
+  blocked_at: string;
+  leads: Array<{ id: string; full_name: string; status: string }>;
+  open_lead_id: string | null;
+};
+
+// Every blocked number, including ones whose lead was deleted, so an admin can always release one.
+// A number that still has an open lead is unblocked from that lead's page (continue or start over).
+function BlockedNumbersPanel({ action }: { action: DashboardAction }) {
+  const [numbers, setNumbers] = useState<BlockedNumber[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    dashboardFetch('/api/dashboard/blocked-numbers', { signal: controller.signal })
+      .then((response) => (response.ok ? (response.json() as Promise<{ numbers: BlockedNumber[] }>) : Promise.reject(new Error('blocked numbers unavailable'))))
+      .then((body) => { setNumbers(body.numbers ?? []); setFailed(false); })
+      .catch(() => { if (!controller.signal.aborted) setFailed(true); });
+    return () => controller.abort();
+  }, [reload]);
+  async function unblock(phone: string) {
+    setBusy(true);
+    try {
+      if (await action('blocked-numbers/unblock', 'POST', { phone }, 'Number unblocked')) {
+        setConfirming(null);
+        setReload((n) => n + 1);
+      }
+    } finally { setBusy(false); }
+  }
+  if (failed) return <Panel title="Blocked numbers"><p className="muted">The blocked numbers could not be loaded right now.</p></Panel>;
+  if (!numbers) return <Panel title="Blocked numbers"><SkeletonRows rows={2} /></Panel>;
+  return <Panel title="Blocked numbers">
+    <p className="muted">Numbers that are never called or texted (the patient asked not to be contacted, or staff chose Do not contact). Unblocking does not call anyone; the next Start cadence on the number runs normally.</p>
+    {numbers.length === 0 ? <Empty title="No blocked numbers" body="Numbers appear here when a patient asks not to be contacted." /> :
+      <DataTable heads={['Number', 'Reason', 'Blocked', 'Lead', '']}>{numbers.map((item) => {
+        const lead = item.leads[0];
+        return <tr key={item.phone}>
+          <td>{item.phone}</td>
+          <td>{operationalMessage(item.reason)}</td>
+          <td>{date(item.blocked_at)}</td>
+          <td>{lead ? <Link href={`/leads/${lead.id}`}>{lead.full_name}</Link> : <span className="muted">Lead deleted</span>}</td>
+          <td>{item.open_lead_id
+            ? <Link className="text-action" href={`/leads/${item.open_lead_id}`}>Unblock on the lead page →</Link>
+            : confirming === item.phone
+              ? <span className="inline-actions"><button className="primary" type="button" disabled={busy} onClick={() => unblock(item.phone)}>Confirm unblock</button> <button className="secondary" type="button" disabled={busy} onClick={() => setConfirming(null)}>Cancel</button></span>
+              : <button className="secondary" type="button" onClick={() => setConfirming(item.phone)}>Unblock</button>}</td>
+        </tr>;
+      })}</DataTable>}
+  </Panel>;
 }
 
 function GlobalCadencePage({ snapshot, action, loading }: { snapshot: Snapshot; action: DashboardAction; loading: boolean }) {

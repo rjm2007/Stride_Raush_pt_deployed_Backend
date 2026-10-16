@@ -14,7 +14,13 @@ from ..db import transaction
 from ..observability import WorkflowTrace
 from ..security import DashboardActor, require_dashboard_auth
 from ..services.lead_stage import stage_of as _stage
-from ..services.number_block import NumberBlockError, block_number, unblock_number
+from ..services.number_block import (
+    NumberBlockError,
+    block_number,
+    blocked_numbers,
+    unblock_number,
+    unblock_number_only,
+)
 from ..services.provider_http import ProviderError
 from ..services.review import (
     REPLACED_REASON,
@@ -128,6 +134,10 @@ class TemplateUpdate(BaseModel):
         if value is not None and not value.strip():
             raise ValueError("must not be blank")
         return value
+
+
+class UnblockNumber(BaseModel):
+    phone: str = Field(min_length=8, max_length=20, pattern=r"^\+[1-9][0-9]{7,15}$")
 
 
 class ManualSmsRequest(BaseModel):
@@ -1035,6 +1045,27 @@ def update_outreach_event(
             str(event_id), {"lead_id": str(lead_id)},
         )
     return {"status": "updated", "scheduled_for": payload.scheduled_for}
+
+
+@router.get("/blocked-numbers")
+def list_blocked_numbers(actor: Actor):
+    """Every blocked number, also those whose lead was deleted (Administration page)."""
+    _require_super_admin(actor)
+    with transaction() as conn:
+        return {"numbers": blocked_numbers(conn)}
+
+
+@router.post("/blocked-numbers/unblock")
+def unblock_blocked_number(payload: UnblockNumber, actor: Actor):
+    _require_super_admin(actor)
+    with transaction() as conn:
+        try:
+            result = unblock_number_only(conn, payload.phone)
+        except NumberBlockError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        _audit(conn, actor, actor.practice_id, "number.unblocked", "phone_number",
+               "…" + payload.phone[-4:], {"leads_released": result["leads_released"]})
+    return result
 
 
 @router.post("/review/{lead_id}/resolve")

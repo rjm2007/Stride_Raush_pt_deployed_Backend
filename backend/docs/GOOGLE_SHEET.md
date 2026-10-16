@@ -59,6 +59,10 @@ lead booked: it sends the booking link, transfers to the front desk, or books a 
 keeps running after each of those until staff mark Booked (or Do Not Contact, or the patient declines).
 After the last cadence step with no booking the lead moves to Closed.
 
+`Number blocked; needs review` (no call): the phone number is on the blocked list (the patient once asked
+not to be contacted). The lead is created in Needs Attention; an admin unblocks it on the lead's page
+(continue or start over). A number whose lead was deleted is unblocked from Administration → Blocked numbers.
+
 `Already booked` (no call): the same phone + name + birthday + case was marked Booked in the last 30 days.
 A different case (booked for Ortho, referred again for Pelvic) starts a new lead.
 

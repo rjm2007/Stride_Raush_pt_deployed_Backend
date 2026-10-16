@@ -87,6 +87,7 @@ const UNCERTAIN_RESULT = /ambiguous|unknown|not reported|not recorded|requires? 
 export function operationalMessage(value: unknown, context: OperationalContext = 'review') {
   const text = String(value ?? '').trim().toLowerCase().replace(/[_-]+/g, ' ');
   if (!text) return OPERATIONAL_DEFAULTS[context];
+  if (/^number blocked/.test(text)) return 'Number blocked: this patient asked not to be contacted. An admin can unblock it on this page to start outreach.';
   if (/moved to review from the board/.test(text)) return 'Moved to staff review.';
   if (/wrong (?:phone|number|person)|invalid phone/.test(text)) return 'The phone number needs review before outreach continues.';
   if (/replaced by sheet lead|phone number change/.test(text)) return 'Contact details changed and need staff review.';

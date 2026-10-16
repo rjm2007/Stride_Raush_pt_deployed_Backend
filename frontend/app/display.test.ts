@@ -81,3 +81,7 @@ test('unblock suggests continuing after a short block and starting over after a 
   assert.match(UNBLOCK_RESULT.continue, /next step/);
   assert.match(UNBLOCK_RESULT.restart, /Day 0/);
 });
+
+test('names a blocked number as the reason a new lead waits', () => {
+  assert.match(operationalMessage('Number blocked: this number asked not to be contacted. Unblock it to start outreach.'), /^Number blocked/);
+});
