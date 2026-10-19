@@ -238,9 +238,9 @@ def test_real_cadence_order_hours_and_first_contact(monkeypatch, added):
 
 
 def test_claim_rules_skip_hours_and_limits_only_for_test_leads_in_testing_mode():
-    # Calling hours and the two daily limits are each bypassed by the same guard, and only when
-    # TESTING_MODE is on AND the lead was created as a test lead.
-    assert CLAIM_SQL.count("(%(testing_mode)s and l.is_test)") == 3
+    # Calling hours, holidays and the two daily limits are each bypassed by the same guard, and only
+    # when TESTING_MODE is on AND the lead was created as a test lead.
+    assert CLAIM_SQL.count("(%(testing_mode)s and l.is_test)") == 4
     assert "test_mode)s" not in CLAIM_SQL.replace("testing_mode)s", "")
 
 

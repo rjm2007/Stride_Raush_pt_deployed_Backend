@@ -156,3 +156,7 @@ here (the schema already matches).
   9:00 on the next business day. Later cadence days run at the same time of day as Day 0, counted from
   the Day 0 date. The old hash-of-lead-id spread over the day (`compute_send_time`) is gone
   (`first_contact_time`, `cadence_day_time`). Simulated again for 10 start times: all rules held.
+- Clinic hours and holidays confirmed by the clinic (Emma): Mon–Fri 8 AM–7 PM, Sat 8 AM–1:30 PM, Sun
+  closed; last new contact 15 min before closing (6:45 PM / 1:15 PM); limits unchanged; 8 holidays (dates
+  to the end of 2028). Applied with `supabase/prod/2026-10-19_clinic_hours_holidays.sql`. The worker's
+  claim now also skips holidays (before, only planning did, so a held-back step could go out on one).
