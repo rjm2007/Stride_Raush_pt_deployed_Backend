@@ -8,6 +8,8 @@ client). Production: the client's project `taimrfktweamsnbbatux` (Singapore, ap-
 | `migrations/NNN_name.sql` | Ordered, idempotent schema changes 001 … 045, **identical to the demo repo**. `rpt migrate` applies any file not yet recorded in `public.schema_migrations`, in filename order. |
 | `seed.sql` | Fresh-sandbox seed (`rpt seed`): the `rausch-pt` practice, settings, default cadence. Local test DBs only. |
 | `dev/reset_test_lead_by_name.sql` | Used by `rpt test-lead` to replace a synthetic test lead; can only match `is_test` synthetic leads. |
+| `prod/2026-10-20_reset_before_handover.sql` | Handover reset after our final tests: removes every lead and everything linked to it, blocked numbers and logs; keeps settings (hours, holidays), cadence and templates. Guarded: stops if more than 4 leads exist. Owner's go only. |
+| `prod/2026-10-19_clinic_hours_holidays.sql` | Calling hours and holidays the clinic confirmed (run on demo and production 2026-10-19). |
 | `prod/2026-10-16_clear_demo_copy.sql` | One-time go-live clean-up of production (it was filled with a demo copy on 2026-10-10): removes test leads and demo data, keeps the setup. Guarded: stops if migrations are missing or any non-test lead exists. Run only with the owner's go-ahead. |
 
 ## Main tables (this build)
