@@ -150,3 +150,9 @@ here (the schema already matches).
 - Fixed: a weekend shift could put two cadence days on the same Monday, and the later one went first (a
   Sunday lead got the Day 1 reminder before the Day 0 call). Each cadence day now gets its own business
   day, in order (`materialize_cadence`). A cadence can therefore end a day or two after calendar day 14.
+- First contact is now immediate (owner, 2026-10-19). A lead added in calling hours gets its Day 0 call
+  right away (in practice 1–2 minutes: Sheet settle + polls), then the Day 0 text 3 minutes later. Added
+  before 9 AM → at 9:00; added in the last 15 minutes before closing, after hours or at a weekend/holiday →
+  9:00 on the next business day. Later cadence days run at the same time of day as Day 0, counted from
+  the Day 0 date. The old hash-of-lead-id spread over the day (`compute_send_time`) is gone
+  (`first_contact_time`, `cadence_day_time`). Simulated again for 10 start times: all rules held.
