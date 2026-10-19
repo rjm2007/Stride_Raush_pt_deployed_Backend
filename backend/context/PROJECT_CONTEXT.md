@@ -140,3 +140,13 @@ here (the schema already matches).
 - Sheet Restart refusal names the real reason ("An invalid phone lead…" / "A Do Not Contact lead…").
 - The Sheet's Lead Status already writes `Closed` for a finished cadence, a declined patient and a confirmed
   wrong number; the Lead Status dropdown in the Sheet must list it (with New and Paused).
+
+### 2026-10-19 — Real cadence checked end to end; order fix
+
+- Simulated the real cadence (TESTING_MODE=false, production's Standard v13 and settings) on a local
+  database for leads started every weekday, after hours and at weekends, with the worker's own claim and
+  close rules on a moving clock. Weekends, 9–5 California hours and the daily limits held; all 9 steps ran
+  and each lead closed after the last one.
+- Fixed: a weekend shift could put two cadence days on the same Monday, and the later one went first (a
+  Sunday lead got the Day 1 reminder before the Day 0 call). Each cadence day now gets its own business
+  day, in order (`materialize_cadence`). A cadence can therefore end a day or two after calendar day 14.
