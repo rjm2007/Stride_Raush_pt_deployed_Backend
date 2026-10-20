@@ -21,7 +21,7 @@
   },
   "voice": {
     "speed": 1.1,
-    "version": "2",
+    "version": "1",
     "voiceId": "Elliot",
     "language": "auto",
     "provider": "vapi"
@@ -93,7 +93,6 @@
     "voiceSeconds": 0.25,
     "backoffSeconds": 1
   },
-  "backgroundSound": "off",
   "voicemailDetection": {
     "type": "audio",
     "provider": "vapi",
