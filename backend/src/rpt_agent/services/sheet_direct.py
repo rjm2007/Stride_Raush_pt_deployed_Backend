@@ -382,7 +382,8 @@ def _start_row_already_done(row: SheetRow, request) -> Outcome | None:
     with transaction() as conn:
         stored = conn.execute(
             "select r.lead_id,r.request_hash from lead_action_requests r "
-            "join leads l on l.id=r.lead_id "
+            # As text: the live lead_action_requests.lead_id is text, the migrated one uuid.
+            "join leads l on l.id::text=r.lead_id::text "
             "where r.request_id=%s and r.status='completed' and r.action='start_cadence'",
             (old,),
         ).fetchone()

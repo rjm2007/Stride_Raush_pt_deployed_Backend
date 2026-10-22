@@ -193,7 +193,8 @@ def _review_status(conn, lead, reasons: set[str]) -> tuple[str | None, str | Non
         # poll) owns the cell: its result is already there and is newer.
         row = conn.execute(
             "select r.resolution from lead_reviews r where r.lead_id=%s and r.resolved_at is not null "
-            "and not exists(select 1 from lead_action_requests a where a.lead_id=r.lead_id "
+            # As text: the live databases store lead_action_requests.lead_id as text (2026-10-22).
+            "and not exists(select 1 from lead_action_requests a where a.lead_id::text=r.lead_id::text "
             "and a.completed_at>r.resolved_at) "
             "order by r.resolved_at desc,r.id desc limit 1",
             (lead["id"],),
