@@ -1,4 +1,6 @@
-@import 'tailwindcss';
+/* No `@import 'tailwindcss'` here: this build has no PostCSS/Tailwind step, so that line generated no CSS.
+   Instead the bundler resolved it to Tailwind's JavaScript compiler and sent ~530 KB of JS to every page.
+   All styles below are plain CSS. */
 
 /* Appointment calendar workspace. HOUR_HEIGHT in appointment-data.ts owns the grid scale. */
 .appointments-workspace { --calendar-accent: var(--blue); --calendar-line: var(--line-2); }
@@ -192,6 +194,11 @@ button:disabled { cursor: not-allowed; }
 .is-collapsed .sidebar nav a { grid-template-columns: 1fr; justify-items: center; padding-inline: 0; }
 .nav-scrim { display: none; }
 .workspace { min-width: 0; grid-column: 2; }
+/* Thin bar while a sidebar click is on its way: the current screen stays visible instead of a blank swap. */
+.nav-progress { position: fixed; top: 0; left: 0; right: 0; z-index: 60; height: 3px; overflow: hidden; pointer-events: none; }
+.nav-progress::before { content: ''; position: absolute; inset: 0 auto 0 0; width: 40%; background: var(--blue); animation: nav-progress 1s ease-in-out infinite; }
+@keyframes nav-progress { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+@media (prefers-reduced-motion: reduce) { .nav-progress::before { animation: none; width: 100%; opacity: .6; } }
 .content, .panel, .page-heading, .page-heading > div, .page-tools { min-width: 0; }
 .topbar { height: 88px; position: sticky; top: 0; z-index: 35; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 0; padding: 0 30px; background: var(--paper); box-shadow: var(--shadow-sm); }
 .client-logo { width: 195px; height: 65px; flex: 0 0 auto; overflow: hidden; border: 0; border-radius: 7px; background: #063fa7 url('/rausch-logo.webp') center / 100% 100% no-repeat; box-shadow: none; }

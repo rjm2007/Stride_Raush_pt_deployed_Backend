@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { dashboardFetch } from './dashboard-client.ts';
+import { queryCache } from './query-cache.ts';
 
 test('dashboard requests preserve errors and redirect expired sessions without retrying writes', async () => {
   const originalFetch = globalThis.fetch;
@@ -21,6 +22,23 @@ test('dashboard requests preserve errors and redirect expired sessions without r
     }
     assert.equal(requests, 4);
     assert.equal(redirects, 1);
+    // A successful write makes its cached reads stale; a failed write or a read leaves them alone.
+    queryCache.set('/api/dashboard/snapshot', 'cached');
+    globalThis.fetch = async (_url, options) => new Response(null, { status: options?.method === 'POST' ? 500 : 200 });
+    await dashboardFetch('/api/dashboard/leads/abc-123/stage', { method: 'POST' });
+    await dashboardFetch('/api/dashboard/snapshot');
+    assert.equal(queryCache.get('/api/dashboard/snapshot')?.stale, false);
+    globalThis.fetch = async () => new Response(null, { status: 200 });
+    await dashboardFetch('/api/dashboard/leads/abc-123/stage', { method: 'POST' });
+    assert.equal(queryCache.get('/api/dashboard/snapshot')?.stale, true);
+    // An expired session forgets everything cached, including assistant chats.
+    const removed: string[] = [];
+    Object.assign(globalThis, { sessionStorage: { removeItem: (key: string) => removed.push(key) } });
+    globalThis.fetch = async () => new Response(null, { status: 401 });
+    await assert.rejects(dashboardFetch('/api/dashboard/snapshot'), /session has expired/);
+    assert.equal(queryCache.get('/api/dashboard/snapshot'), undefined);
+    assert.deepEqual(removed, ['rpt-assistant-session-chats']);
+    delete (globalThis as { sessionStorage?: unknown }).sessionStorage;
     globalThis.fetch = async () => { throw new TypeError('Network unavailable'); };
     await assert.rejects(dashboardFetch('/api/dashboard/snapshot'), /Network unavailable/);
   } finally {

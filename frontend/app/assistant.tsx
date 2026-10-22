@@ -2,18 +2,17 @@
 
 import { DragEvent, FormEvent, KeyboardEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { Lead } from './dashboard-data';
 import { displayEnum } from './display';
 import { dashboardFetch } from './dashboard-client';
+import { saveChats, loadChats, type Chat, type ChatMessage } from './assistant-store';
 
 // The backend assistant only ever sees leads the staff member has explicitly
 // loaded (at most three), so loading a lead is the first thing the UI does.
 export const MAX_LEADS = 3;
 const LEAD_MIME = 'application/x-rpt-lead';
-const CHATS_KEY = 'rpt-assistant-chats';
-
-export type ChatMessage = { role: 'user' | 'assistant'; content: string; error?: boolean };
-export type Chat = { id: string; title: string; leadIds: string[]; messages: ChatMessage[]; updated: number };
+export type { Chat, ChatMessage } from './assistant-store';
 
 export function setLeadDragData(event: DragEvent, leadId: string) {
   event.dataTransfer.setData(LEAD_MIME, leadId);
@@ -35,12 +34,18 @@ export function newChat(leadIds: string[] = []): Chat {
   return { id: crypto.randomUUID(), title: 'New chat', leadIds, messages: [], updated: Date.now() };
 }
 
-export function loadChats(): Chat[] {
-  try { return JSON.parse(localStorage.getItem(CHATS_KEY) ?? '[]') as Chat[]; } catch { return []; }
+function SparkIcon() {
+  return <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /><path d="M19 17l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" /></svg>;
 }
-export function saveChats(chats: Chat[]) {
-  try { localStorage.setItem(CHATS_KEY, JSON.stringify(chats.slice(0, 50))); } catch { /* storage unavailable */ }
+function ControlIcon({ name }: { name: 'plus' | 'external' | 'close' | 'stop' | 'send' }) {
+  const path = name === 'plus' ? <path d="M12 5v14M5 12h14" />
+    : name === 'external' ? <><path d="M14 4h6v6M20 4l-9 9" /><path d="M18 13v6H5V6h6" /></>
+    : name === 'close' ? <path d="m6 6 12 12M18 6 6 18" />
+    : name === 'stop' ? <rect x="7" y="7" width="10" height="10" rx="1" />
+    : <path d="m5 12 14-7-4 14-3-6zM12 13l7-8" />;
+  return <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{path}</svg>;
 }
+
 
 // Streams one answer from the backend. onDelta receives text as it arrives.
 export async function askAssistant(
@@ -123,18 +128,6 @@ export function RichText({ text }: { text: string }) {
   return <>{blocks}</>;
 }
 
-function SparkIcon() {
-  return <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" aria-hidden="true"><path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z" /><path d="M19 17l.7 1.8 1.8.7-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7z" /></svg>;
-}
-function ControlIcon({ name }: { name: 'plus' | 'external' | 'close' | 'stop' | 'send' }) {
-  const path = name === 'plus' ? <path d="M12 5v14M5 12h14" />
-    : name === 'external' ? <><path d="M14 4h6v6M20 4l-9 9" /><path d="M18 13v6H5V6h6" /></>
-    : name === 'close' ? <path d="m6 6 12 12M18 6 6 18" />
-    : name === 'stop' ? <rect x="7" y="7" width="10" height="10" rx="1" />
-    : <path d="m5 12 14-7-4 14-3-6zM12 13l7-8" />;
-  return <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{path}</svg>;
-}
-
 export function AssistantChat({ chat, leads, currentPath, onChange, compact = false, header }: {
   chat: Chat; leads: Lead[]; currentPath: string; onChange: (chat: Chat) => void; compact?: boolean; header?: ReactNode;
 }) {
@@ -214,8 +207,43 @@ export function AssistantChat({ chat, leads, currentPath, onChange, compact = fa
   </div>;
 }
 
+// Full page: chat history on the left, lead picker, and the same chat body.
+export function AssistantPage({ leads, initialChatId, owner }: { leads: Lead[]; initialChatId: string | null; owner: string }) {
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [activeId, setActiveId] = useState<string>('');
+  const [search, setSearch] = useState('');
+  useEffect(() => {
+    // sessionStorage exists only in the browser: read it after hydration.
+    const stored = loadChats(owner);
+    const first = stored.find((chat) => chat.id === initialChatId) ?? stored[0] ?? newChat();
+    setChats(stored.some((chat) => chat.id === first.id) ? stored : [first, ...stored]); // eslint-disable-line react-hooks/set-state-in-effect
+    setActiveId(first.id);
+  }, [initialChatId, owner]);
+  const active = chats.find((chat) => chat.id === activeId);
+  function update(next: Chat) { setChats((current) => { const list = [next, ...current.filter((chat) => chat.id !== next.id)]; saveChats(owner, list); return list; }); }
+  function create() { const chat = newChat(); setChats((current) => { const list = [chat, ...current]; saveChats(owner, list); return list; }); setActiveId(chat.id); }
+  function remove(id: string) { setChats((current) => { const remaining = current.filter((chat) => chat.id !== id); const list = remaining.length ? remaining : [newChat()]; saveChats(owner, list); if (id === activeId) setActiveId(list[0].id); return list; }); }
+  const matches = search.trim() ? leads.filter((lead) => lead.full_name.toLowerCase().includes(search.trim().toLowerCase())).slice(0, 8) : [];
+  if (!active) return null;
+  return <div className="assistant-page">
+    <h1 className="sr-only">Outreach Assistant</h1>
+    <aside className="assistant-history">
+      <button type="button" className="primary icon-label" onClick={create}><ControlIcon name="plus" />New chat</button>
+      <div className="assistant-history-list">{chats.map((chat) => <div className={`assistant-history-item ${chat.id === activeId ? 'selected' : ''}`} key={chat.id}><button type="button" aria-pressed={chat.id === activeId} onClick={() => setActiveId(chat.id)}><strong>{chat.title}</strong><small>{chat.leadIds.length ? `${chat.leadIds.length} lead${chat.leadIds.length > 1 ? 's' : ''} · ` : ''}{new Date(chat.updated).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</small></button><button type="button" aria-label={`Delete ${chat.title}`} onClick={() => remove(chat.id)}><ControlIcon name="close" /></button></div>)}</div>
+    </aside>
+    <section className="assistant-main">
+      <div className="assistant-picker">
+        <label className="sr-only" htmlFor="assistant-lead-search">Add a lead to this chat</label><input id="assistant-lead-search" value={search} placeholder={active.leadIds.length >= MAX_LEADS ? `Up to ${MAX_LEADS} leads per chat` : 'Add a lead by name…'} disabled={active.leadIds.length >= MAX_LEADS} onChange={(event) => setSearch(event.target.value)} />
+        {matches.length > 0 && <div className="assistant-picker-results">{matches.map((lead) => <button type="button" key={lead.id} disabled={active.leadIds.includes(lead.id)} onClick={() => { update(touch(active, { leadIds: [...active.leadIds, lead.id] })); setSearch(''); }}><strong>{lead.full_name}</strong><small>{lead.location ?? ''} · {displayEnum(lead.status)}</small></button>)}</div>}
+      </div>
+      <AssistantChat chat={active} leads={leads} currentPath="/assistant" onChange={update} header={<div className="assistant-head"><span className="assistant-logo" aria-hidden="true"><SparkIcon /></span><div><strong>Outreach Assistant</strong><small>Reads live data · read-only</small></div></div>} />
+    </section>
+  </div>;
+}
+
 // Floating button + popover. Drag a lead card over the button and it opens.
-export function AssistantDock({ leads, currentPath, currentLeadId }: { leads: Lead[]; currentPath: string; currentLeadId?: string }) {
+export function AssistantDock({ leads, currentPath, currentLeadId, owner }: { leads: Lead[]; currentPath: string; currentLeadId?: string; owner: string }) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [armed, setArmed] = useState(false);
   const [chat, setChat] = useState<Chat>(() => newChat());
@@ -238,19 +266,21 @@ export function AssistantDock({ leads, currentPath, currentLeadId }: { leads: Le
   }
   function loadCurrent() { if (currentLeadId && !chat.leadIds.includes(currentLeadId) && chat.leadIds.length < MAX_LEADS) setChat((current) => touch(current, { leadIds: [...current.leadIds, currentLeadId] })); }
   function openFullPage() {
-    // Hand the popover's chat to the full page so nothing is lost.
-    saveChats([{ ...chat, title: chat.messages[0]?.content.slice(0, 60) ?? chat.title }, ...loadChats().filter((item) => item.id !== chat.id)]);
-    window.open(`/assistant?chat=${chat.id}`, '_blank', 'noopener');
+    // Hand the popover's chat to the full page so nothing is lost. Same tab: chats live in this tab's
+    // sessionStorage, which a new tab would not see.
+    saveChats(owner, [{ ...chat, title: chat.messages[0]?.content.slice(0, 60) ?? chat.title }, ...loadChats(owner).filter((item) => item.id !== chat.id)]);
+    setOpen(false);
+    router.push(`/assistant?chat=${chat.id}`);
   }
   return <>
     {open && <div className="assistant-pop" role="dialog" aria-label="Outreach Assistant">
       <AssistantChat chat={chat} leads={leads} currentPath={currentPath} onChange={setChat} compact header={<div className="assistant-head">
-        <button type="button" className="assistant-logo" aria-label="Open the assistant in a new tab" title="Open the assistant in a new tab" onClick={openFullPage}><SparkIcon /></button>
+        <button type="button" className="assistant-logo" aria-label="Open the full assistant page" title="Open the full assistant page" onClick={openFullPage}><SparkIcon /></button>
         <div><strong>Outreach Assistant</strong><small>Reads live data · read-only</small></div>
         <div className="assistant-head-actions">
           {currentLeadId && !chat.leadIds.includes(currentLeadId) && chat.leadIds.length < MAX_LEADS && <button type="button" onClick={loadCurrent}>Load this lead</button>}
           <button type="button" onClick={() => setChat(newChat())} title="New chat" aria-label="New chat"><ControlIcon name="plus" /></button>
-          <button type="button" onClick={openFullPage} title="Open in new tab" aria-label="Open in new tab"><ControlIcon name="external" /></button>
+          <button type="button" onClick={openFullPage} title="Open full page" aria-label="Open full page"><ControlIcon name="external" /></button>
           <button type="button" onClick={() => setOpen(false)} title="Close" aria-label="Close assistant"><ControlIcon name="close" /></button>
         </div>
       </div>} />
@@ -260,40 +290,6 @@ export function AssistantDock({ leads, currentPath, currentLeadId }: { leads: Le
       <SparkIcon />{armed && <span className="assistant-fab-hint">Drop lead here</span>}{chat.leadIds.length > 0 && !open && <b>{chat.leadIds.length}</b>}
     </button>
   </>;
-}
-
-// Full page: chat history on the left, lead picker, and the same chat body.
-export function AssistantPage({ leads, initialChatId }: { leads: Lead[]; initialChatId: string | null }) {
-  const [chats, setChats] = useState<Chat[]>([]);
-  const [activeId, setActiveId] = useState<string>('');
-  const [search, setSearch] = useState('');
-  useEffect(() => {
-    // localStorage exists only in the browser: read it after hydration.
-    const stored = loadChats();
-    const first = stored.find((chat) => chat.id === initialChatId) ?? stored[0] ?? newChat();
-    setChats(stored.some((chat) => chat.id === first.id) ? stored : [first, ...stored]); // eslint-disable-line react-hooks/set-state-in-effect
-    setActiveId(first.id);
-  }, [initialChatId]);
-  const active = chats.find((chat) => chat.id === activeId);
-  function update(next: Chat) { setChats((current) => { const list = [next, ...current.filter((chat) => chat.id !== next.id)]; saveChats(list); return list; }); }
-  function create() { const chat = newChat(); setChats((current) => { const list = [chat, ...current]; saveChats(list); return list; }); setActiveId(chat.id); }
-  function remove(id: string) { setChats((current) => { const remaining = current.filter((chat) => chat.id !== id); const list = remaining.length ? remaining : [newChat()]; saveChats(list); if (id === activeId) setActiveId(list[0].id); return list; }); }
-  const matches = search.trim() ? leads.filter((lead) => lead.full_name.toLowerCase().includes(search.trim().toLowerCase())).slice(0, 8) : [];
-  if (!active) return null;
-  return <div className="assistant-page">
-    <h1 className="sr-only">Outreach Assistant</h1>
-    <aside className="assistant-history">
-      <button type="button" className="primary icon-label" onClick={create}><ControlIcon name="plus" />New chat</button>
-      <div className="assistant-history-list">{chats.map((chat) => <div className={`assistant-history-item ${chat.id === activeId ? 'selected' : ''}`} key={chat.id}><button type="button" aria-pressed={chat.id === activeId} onClick={() => setActiveId(chat.id)}><strong>{chat.title}</strong><small>{chat.leadIds.length ? `${chat.leadIds.length} lead${chat.leadIds.length > 1 ? 's' : ''} · ` : ''}{new Date(chat.updated).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</small></button><button type="button" aria-label={`Delete ${chat.title}`} onClick={() => remove(chat.id)}><ControlIcon name="close" /></button></div>)}</div>
-    </aside>
-    <section className="assistant-main">
-      <div className="assistant-picker">
-        <label className="sr-only" htmlFor="assistant-lead-search">Add a lead to this chat</label><input id="assistant-lead-search" value={search} placeholder={active.leadIds.length >= MAX_LEADS ? `Up to ${MAX_LEADS} leads per chat` : 'Add a lead by name…'} disabled={active.leadIds.length >= MAX_LEADS} onChange={(event) => setSearch(event.target.value)} />
-        {matches.length > 0 && <div className="assistant-picker-results">{matches.map((lead) => <button type="button" key={lead.id} disabled={active.leadIds.includes(lead.id)} onClick={() => { update(touch(active, { leadIds: [...active.leadIds, lead.id] })); setSearch(''); }}><strong>{lead.full_name}</strong><small>{lead.location ?? ''} · {displayEnum(lead.status)}</small></button>)}</div>}
-      </div>
-      <AssistantChat chat={active} leads={leads} currentPath="/assistant" onChange={update} header={<div className="assistant-head"><span className="assistant-logo" aria-hidden="true"><SparkIcon /></span><div><strong>Outreach Assistant</strong><small>Reads live data · read-only</small></div></div>} />
-    </section>
-  </div>;
 }
 
 export function ThemeToggle() {

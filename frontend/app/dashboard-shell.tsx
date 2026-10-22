@@ -3,13 +3,16 @@
 import Link from 'next/link';
 import { ModalShell, SelectMenu } from './dashboard-controls';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
+import { FormEvent, ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { cadenceActionDescription, cadenceCallNames, cadenceStepName, cadenceRunSummary, isCadenceStep, reorderCadenceSteps, splitCadenceRuns, type CadenceEvent } from './cadence';
 import { ActivityEntry, CadenceStep, CadenceVersion, emptySnapshot, Lead, LeadDetail, LeadStage, NumberBlock, Snapshot, StaffMember } from './dashboard-data';
 import { AssistantDock, AssistantPage, ThemeToggle, setLeadDragData } from './assistant';
+import { clearChats, purgeLegacyChats } from './assistant-store';
 import { ActivityKind, clientErrorMessage, clinicDateTimeValue, clinicWallTimeToIso, CLINIC_TZ, CLINIC_TZ_LABEL, defaultAfterUnblock, displayEnum, numberBlockMessage, operationalMessage, UNBLOCK_RESULT, type AfterUnblock, sourceLabel, statusTone, teamActivity, timezoneLabel } from './display';
 import type { StaffUser } from './session';
-import { dashboardFetch } from './dashboard-client';
+import { dashboardFetch, DashboardHttpError } from './dashboard-client';
+import { queryCache } from './query-cache';
+import { cachedFetchers, cacheKeys, cancelLeadPrefetch, prefetchLeadOnHover, useCached } from './use-cached';
 
 const statusMeta: Record<LeadStage, { label: string }> = {
   new: { label: 'New' },
@@ -121,23 +124,56 @@ function NavIcon({ name }: { name: string }) {
 }
 
 
-export function DashboardShell({ user, staff }: { user: StaffUser; staff: StaffMember[] }) {
+const REFRESH_MS = 20_000;
+const noLeadFetch = () => Promise.reject(new Error('no lead selected'));
+
+export function DashboardShell({ user, staff, children }: { user: StaffUser; staff: StaffMember[]; children?: ReactNode }) {
+  // Before any cached read below: a different staff member never sees the previous one's cache.
+  queryCache.setScope(user.userId);
   const pathname = usePathname();
   const search = useSearchParams();
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(true);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [compactViewport, setCompactViewport] = useState(false);
-  const [snapshot, setSnapshot] = useState<Snapshot>(emptySnapshot);
-  const [detail, setDetail] = useState<LeadDetail | null>(null);
-  const [connection, setConnection] = useState<'loading' | 'live' | 'offline'>('loading');
-  const [snapshotLoaded, setSnapshotLoaded] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
   const [notice, setNotice] = useState<{ message: string; tone: 'success' | 'error' } | null>(null);
   const [selectedLocation, setSelectedLocation] = useState('All Locations');
   const [globalQuery, setGlobalQuery] = useState('');
-  const [reloadKey, setReloadKey] = useState(0);
+  // Sidebar link clicked but not yet on screen: highlighted at once, with a thin bar at the top.
+  const [pending, setPending] = useState<{ href: string; from: string } | null>(null);
+  const pendingHref = pending && pending.from === pathname ? pending.href : null;
   const leadId = pathname.match(/^\/leads\/([0-9a-f-]+)/i)?.[1];
+
+  // Reads go through the in-memory cache: a revisit paints the last answer at once and refreshes it in
+  // the background (and every REFRESH_MS while the tab is visible, as before).
+  const snapshotQuery = useCached(cacheKeys.snapshot, cachedFetchers.snapshot, { refreshMs: REFRESH_MS });
+  const leadQuery = useCached(leadId ? cacheKeys.lead(leadId) : null, leadId ? cachedFetchers.lead(leadId) : noLeadFetch, { refreshMs: REFRESH_MS });
+  const snapshot = snapshotQuery.data ?? emptySnapshot;
+  const detail = leadQuery.data ?? null;
+  const leadMissing = leadQuery.error instanceof DashboardHttpError && leadQuery.error.status === 404;
+  const connection: 'loading' | 'live' | 'offline' = retrying ? 'loading' : snapshotQuery.error ? 'offline' : snapshotQuery.data ? 'live' : 'loading';
+
+  // Next scrolls to the top of the page segment it swaps in; the dashboard's pages render nothing (the
+  // shell draws every screen), so that scroll no longer happens. Do it here on each new screen, but
+  // leave back/forward alone so the browser can restore where staff were.
+  const firstScreen = useRef(true);
+  const historyStep = useRef(false);
+  useEffect(() => {
+    const onPop = () => { historyStep.current = true; };
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+  useLayoutEffect(() => {
+    if (firstScreen.current) { firstScreen.current = false; return; }
+    if (historyStep.current) { historyStep.current = false; return; }
+    window.scrollTo(0, 0);
+  }, [pathname]);
+
+  useEffect(() => {
+    // Older builds kept assistant chats (patient details) in localStorage; remove that copy.
+    purgeLegacyChats();
+  }, []);
 
   useEffect(() => {
     const media = window.matchMedia('(max-width: 980px)');
@@ -147,39 +183,16 @@ export function DashboardShell({ user, staff }: { user: StaffUser; staff: StaffM
   }, []);
 
   useEffect(() => {
-    const controller = new AbortController();
-    function refresh() {
-      dashboardFetch('/api/dashboard/snapshot', { signal: controller.signal })
-        .then((response) => response.ok ? response.json() as Promise<Snapshot> : Promise.reject())
-        .then((data) => { setSnapshot(data); setSnapshotLoaded(true); setConnection('live'); })
-        .catch((error) => { if (error?.name !== 'AbortError') setConnection('offline'); });
-    }
-    refresh();
-    const interval = window.setInterval(() => { if (!document.hidden) refresh(); }, 20000);
-    const onVisible = () => { if (!document.hidden) refresh(); };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => { controller.abort(); window.clearInterval(interval); document.removeEventListener('visibilitychange', onVisible); };
-  }, [reloadKey]);
+    // The shell stays mounted between screens, so each screen change refreshes the data quietly in the
+    // background (the cached copy is already on screen). An answer younger than 2 s is reused.
+    void queryCache.fetch(cacheKeys.snapshot, cachedFetchers.snapshot, { maxAgeMs: 2_000 }).catch(() => {});
+    if (leadId) void queryCache.fetch(cacheKeys.lead(leadId), cachedFetchers.lead(leadId), { maxAgeMs: 2_000 }).catch(() => {});
+  }, [pathname, leadId]);
 
   useEffect(() => {
-    if (!leadId) return;
-    const requestedLeadId = leadId;
-    const controller = new AbortController();
-    function refresh() {
-      dashboardFetch(`/api/dashboard/leads/${requestedLeadId}`, { signal: controller.signal })
-        .then((response) => {
-          if (response.status === 404) { router.replace('/leads'); throw new Error('lead not found'); }
-          return response.ok ? response.json() as Promise<LeadDetail> : Promise.reject();
-        })
-        .then((data) => { setDetail(data); setDetailError(null); })
-        .catch((error) => { if (error?.name !== 'AbortError' && error?.message !== 'lead not found') setDetailError(requestedLeadId); });
-    }
-    refresh();
-    const interval = window.setInterval(() => { if (!document.hidden) refresh(); }, 20000);
-    const onVisible = () => { if (!document.hidden) refresh(); };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => { controller.abort(); window.clearInterval(interval); document.removeEventListener('visibilitychange', onVisible); };
-  }, [leadId, router, reloadKey]);
+    // A deleted or unknown lead sends staff back to the pipeline, as before.
+    if (leadMissing) router.replace('/leads');
+  }, [leadMissing, router]);
 
   function showNotice(message: string, tone: 'success' | 'error' = 'success') {
     setNotice({ message, tone });
@@ -196,8 +209,9 @@ export function DashboardShell({ user, staff }: { user: StaffUser; staff: StaffM
       if (!response.ok) {
         throw new Error(clientErrorMessage(data.detail, failureCopy));
       }
+      // dashboardFetch has already marked the reads this write changed as stale; the ones on screen are
+      // refetching now, so nothing keeps showing the pre-action state.
       showNotice(successMessage);
-      setReloadKey((value) => value + 1);
       return data;
     } catch (error) {
       const message = clientErrorMessage(error instanceof Error ? error.message : '', failureCopy);
@@ -207,8 +221,13 @@ export function DashboardShell({ user, staff }: { user: StaffUser; staff: StaffM
     }
   }
 
+  // Optimistic edits to the cached snapshot; the refetch the write started replaces them with the server's answer.
+  function updateSnapshot(change: (current: Snapshot) => Snapshot) {
+    if (queryCache.get<Snapshot>(cacheKeys.snapshot)?.data) snapshotQuery.mutate((current) => change(current!));
+  }
+
   function resolveLeadReview(id: string) {
-    setSnapshot((current) => ({
+    updateSnapshot((current) => ({
       ...current,
       leads: current.leads.map((lead) => lead.id === id ? { ...lead, stage: 'cadence', needs_review: false, review_reason: null, next_step: 'Resume cadence' } : lead),
       counts: { ...current.counts, attention: Math.max(0, current.counts.attention - 1), cadence: current.counts.cadence + 1 },
@@ -217,7 +236,7 @@ export function DashboardShell({ user, staff }: { user: StaffUser; staff: StaffM
   }
 
   function publishTemplate(id: string, body: string, name: string) {
-    setSnapshot((current) => ({
+    updateSnapshot((current) => ({
       ...current,
       templates: current.templates.map((template) => String(template.id) === id ? { ...template, body, key: name, name } : template),
     }));
@@ -240,21 +259,27 @@ export function DashboardShell({ user, staff }: { user: StaffUser; staff: StaffM
     try {
       const response = await fetch('/api/auth/logout', { method: 'POST' });
       if (!response.ok) throw new Error();
-      router.replace('/login');
-      router.refresh();
+      // A full page load, not a client navigation: it drops the in-memory data cache and Next's router
+      // cache together, so nothing from this session is left in the tab for the next person.
+      queryCache.clear();
+      clearChats();
+      window.location.assign('/login');
     } catch { showNotice('Sign out failed. Try again.', 'error'); }
   }
 
   const visibleNav = user.role === 'super_admin' ? nav : nav.filter(([href]) => href !== '/administration');
   const activeLabel = pathname === '/assistant' ? 'Outreach Assistant' : visibleNav.find(([href]) => href === '/' ? pathname === '/' : pathname.startsWith(href))?.[2] ?? 'Lead Workspace';
   const navigationOpen = compactViewport ? mobileMenuOpen : menuOpen;
-  const recordUnavailable = Boolean(leadId && detailError === leadId);
+  const recordUnavailable = Boolean(leadId && leadQuery.error && !leadMissing && !retrying);
   const unavailable = connection === 'offline' || recordUnavailable;
-  const canShowData = snapshotLoaded && (!leadId || detail?.lead.id === leadId);
-  function retryConnection() {
-    setConnection('loading');
-    setDetailError(null);
-    setReloadKey((value) => value + 1);
+  const canShowData = snapshotQuery.data !== undefined && (!leadId || detail?.lead.id === leadId);
+  async function retryConnection() {
+    setRetrying(true);
+    try { await Promise.all([snapshotQuery.revalidate(), leadId ? leadQuery.revalidate() : undefined]); } finally { setRetrying(false); }
+  }
+  function navigate(href: string) {
+    setMobileMenuOpen(false);
+    if (href !== pathname) setPending({ href, from: pathname });
   }
   return (
     <div className={`app-shell ${menuOpen ? '' : 'is-collapsed'} ${mobileMenuOpen ? 'mobile-menu-open' : ''}`}>
@@ -267,10 +292,11 @@ export function DashboardShell({ user, staff }: { user: StaffUser; staff: StaffM
             <span className="desktop-toggle-icon"><SidebarToggleIcon collapsed={!menuOpen} /></span><span className="mobile-toggle-icon"><MobileMenuIcon open={mobileMenuOpen} /></span>
           </button>
         </div>
-        <nav aria-label="Primary navigation">{visibleNav.map(([href, icon, label]) => { const active = href === '/' ? pathname === '/' : pathname.startsWith(href); return <Link className={active ? 'active' : ''} aria-label={label} title={label} aria-current={active ? 'page' : undefined} href={href} key={href} onClick={() => setMobileMenuOpen(false)}><b><NavIcon name={icon} /></b><span>{label}</span></Link>; })}</nav>
+        <nav aria-label="Primary navigation">{visibleNav.map(([href, icon, label]) => { const active = pendingHref ? pendingHref === href : href === '/' ? pathname === '/' : pathname.startsWith(href); return <Link className={active ? 'active' : ''} aria-label={label} title={label} aria-current={active ? 'page' : undefined} href={href} key={href} onClick={() => navigate(href)}><b><NavIcon name={icon} /></b><span>{label}</span></Link>; })}</nav>
       </aside>
       {mobileMenuOpen && <button className="nav-scrim" type="button" aria-label="Close navigation menu" onClick={() => setMobileMenuOpen(false)} />}
       <div className="workspace">
+        {pendingHref && <div className="nav-progress" role="progressbar" aria-label="Loading page" />}
         <header className="topbar">
           <Link href="/" className="client-logo" aria-label="Rausch Physical Therapy & Wellness home"><span className="sr-only">Rausch Physical Therapy & Wellness</span></Link>
           <div className="product-name">{activeLabel}</div>
@@ -280,15 +306,15 @@ export function DashboardShell({ user, staff }: { user: StaffUser; staff: StaffM
             <ThemeToggle /><span className={`connection ${unavailable ? 'offline' : connection}`} role="status"><i aria-hidden="true" />{unavailable ? 'Offline' : connection === 'live' ? 'Connected' : 'Connecting…'}</span><details className="account-menu"><summary className="avatar" title={user.displayName} aria-label={`Account menu for ${user.displayName}`}>{initials(user.displayName)}</summary><div><strong>{user.displayName}</strong><small>{user.role === 'super_admin' ? 'Administrator' : 'Team member'} · {user.employeeId}</small><button type="button" aria-label="Sign out" onClick={() => void signOut()}>Sign out</button></div></details>
           </div>
         </header>
-        <main className="content" id="main-content">{unavailable && !canShowData ? <OfflineState onRetry={retryConnection} /> : <>{unavailable && <div className="connection-notice" role="alert"><p><strong>Updates paused.</strong> You’re viewing the last loaded data. Reconnect before making changes.</p><button className="secondary" type="button" onClick={retryConnection}>Retry connection</button></div>}{visibleSnapshot.testing_mode && <Alert tone="warning"><strong>Testing mode is on.</strong> New Sheet leads are test leads: each cadence day lasts one minute and calling hours are ignored. Set TESTING_MODE=false on the server before real patients are added.</Alert>}{renderPage(pathname, search.get('view'), search.get('search'), search.get('stage'), search.get('chat'), visibleSnapshot, connection === 'loading', detail, router, action, resolveLeadReview, publishTemplate, user.role, staff)}</>}</main>
+        <main className="content" id="main-content">{unavailable && !canShowData ? <OfflineState onRetry={retryConnection} /> : <>{unavailable && <div className="connection-notice" role="alert"><p><strong>Updates paused.</strong> You’re viewing the last loaded data. Reconnect before making changes.</p><button className="secondary" type="button" onClick={retryConnection}>Retry connection</button></div>}{visibleSnapshot.testing_mode && <Alert tone="warning"><strong>Testing mode is on.</strong> New Sheet leads are test leads: each cadence day lasts one minute and calling hours are ignored. Set TESTING_MODE=false on the server before real patients are added.</Alert>}{renderPage(pathname, search.get('view'), search.get('search'), search.get('stage'), search.get('chat'), visibleSnapshot, snapshotQuery.data === undefined, detail, router, action, resolveLeadReview, publishTemplate, user.role, staff, user.userId)}</>}{children}</main>
       </div>
-      {pathname !== '/assistant' && <AssistantDock leads={snapshot.leads} currentPath={pathname} currentLeadId={leadId} />}
+      {pathname !== '/assistant' && <AssistantDock leads={snapshot.leads} currentPath={pathname} currentLeadId={leadId} owner={user.userId} />}
       {notice && <div className={`toast ${notice.tone}`} role={notice.tone === 'error' ? 'alert' : 'status'}>{notice.tone === 'error' ? '!' : '✓'} {notice.message}</div>}
     </div>
   );
 }
 
-function renderPage(path: string, view: string | null, query: string | null, stage: string | null, chatId: string | null, snapshot: Snapshot, loading: boolean, detail: LeadDetail | null, router: ReturnType<typeof useRouter>, action: DashboardAction, onReviewResolved: (id: string) => void, onTemplatePublished: (id: string, body: string, name: string) => void, role: StaffUser['role'], staff: StaffMember[]) {
+function renderPage(path: string, view: string | null, query: string | null, stage: string | null, chatId: string | null, snapshot: Snapshot, loading: boolean, detail: LeadDetail | null, router: ReturnType<typeof useRouter>, action: DashboardAction, onReviewResolved: (id: string) => void, onTemplatePublished: (id: string, body: string, name: string) => void, role: StaffUser['role'], staff: StaffMember[], userId: string) {
   const requestedLeadId = path.match(/^\/leads\/([0-9a-f-]+)/i)?.[1];
   // Narrowed to a non-null LeadDetail so the lead routes below typecheck; the
   // runtime behaviour is unchanged.
@@ -297,7 +323,7 @@ function renderPage(path: string, view: string | null, query: string | null, sta
   if (path === '/') return <HomePage snapshot={snapshot} loading={loading} />;
   if (path === '/leads' && loading && !snapshot.leads.length) return <><PageTitle title="Lead Pipeline" subtitle="Loading the latest pipeline…" /><SkeletonBoard /></>;
   if (path === '/leads') return <LeadsPage key={`${view}-${query}-${stage}`} snapshot={snapshot} staff={staff} mode={view === 'list' ? 'list' : 'board'} initialQuery={query ?? ''} initialStage={stage && Object.hasOwn(statusMeta, stage) ? stage as LeadStage : null} router={router} action={action} />;
-  if (path === '/assistant') return <AssistantPage leads={snapshot.leads} initialChatId={chatId} />;
+  if (path === '/assistant') return <AssistantPage leads={snapshot.leads} initialChatId={chatId} owner={userId} />;
   if (path === '/review') return <ReviewPage snapshot={snapshot} action={action} onResolved={onReviewResolved} loading={loading} />;
   if (path === '/analytics') return <AnalyticsPage snapshot={snapshot} loading={loading} />;
   if (path.startsWith('/administration') && role !== 'super_admin') return <Empty title="Administrator access required" body="Team members can manage every lead, while organization-wide settings stay protected." />;
@@ -317,7 +343,7 @@ function HomePage({ snapshot, loading }: { snapshot: Snapshot; loading: boolean 
   const work = snapshot.leads.filter((lead) => lead.stage !== 'closed' && lead.stage !== 'booked').slice(0, 5);
   return <><PageTitle title="Outreach Operations" subtitle="Your team’s latest lead and outreach overview." />
     {loading && !snapshot.leads.length ? <SkeletonTiles /> : <StatusTiles counts={snapshot.counts} loading={loading} />}
-    <div className="home-work"><Panel title="Today’s Work">{loading && !snapshot.leads.length ? <SkeletonRows rows={5} /> : work.length ? <><DataTable heads={['Lead', 'Status', 'Next step', 'Due', 'Action']}>{work.map((lead) => <tr key={lead.id}><td><Link href={`/leads/${lead.id}`}>{lead.full_name}</Link></td><td><StatusBadge stage={lead.stage} paused={lead.cadence_state === 'paused'} /></td><td>{lead.next_step ?? '—'}</td><td>{time(lead.next_scheduled_for)}</td><td><Link className="text-action" href={`/leads/${lead.id}`}>Open →</Link></td></tr>)}</DataTable><div className="panel-action"><Link className="primary" href={`/leads/${work[0].id}`}>Start next task</Link></div></> : <Empty title="Today’s work is clear" body="There are no active leads waiting for outreach." />}</Panel>
+    <div className="home-work"><Panel title="Today’s Work">{loading && !snapshot.leads.length ? <SkeletonRows rows={5} /> : work.length ? <><DataTable heads={['Lead', 'Status', 'Next step', 'Due', 'Action']}>{work.map((lead) => <tr key={lead.id} onMouseEnter={() => prefetchLeadOnHover(lead.id)} onMouseLeave={cancelLeadPrefetch}><td><Link href={`/leads/${lead.id}`}>{lead.full_name}</Link></td><td><StatusBadge stage={lead.stage} paused={lead.cadence_state === 'paused'} /></td><td>{lead.next_step ?? '—'}</td><td>{time(lead.next_scheduled_for)}</td><td><Link className="text-action" href={`/leads/${lead.id}`}>Open →</Link></td></tr>)}</DataTable><div className="panel-action"><Link className="primary" href={`/leads/${work[0].id}`}>Start next task</Link></div></> : <Empty title="Today’s work is clear" body="There are no active leads waiting for outreach." />}</Panel>
     </div></>;
 }
 
@@ -429,8 +455,8 @@ The remaining schedule is discarded and a new cadence begins from today. They wi
   );
   return <><PageTitle title="Lead Pipeline" subtitle="Select a lead to open their workspace." tools={<><div className="segmented" aria-label="Lead view"><Link className={mode === 'list' ? 'selected' : ''} href="/leads?view=list"><span className="view-icon" aria-hidden="true">☷</span>List</Link><Link className={mode === 'board' ? 'selected' : ''} href="/leads"><span className="view-icon" aria-hidden="true">▦</span>Board</Link></div><SelectMenu className="filter-control" ariaLabel="Filter leads by owner" value={owner} onChange={setOwner} options={['All Owners', ...availableOwners].map((item) => ({ value: item, label: item }))} /><label className="search-field"><span aria-hidden="true">⌕</span><input aria-label="Filter leads by name or contact details" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search leads" /></label></>} />
     {initialStage && <div className="active-filter">Showing {statusMeta[initialStage].label} leads <Link href="/leads">Clear filter</Link></div>}
-    {!leads.length ? <Panel><Empty title="No matching leads" body="Try another owner, location, or search term." /></Panel> : mode === 'board' ? <section className="pipeline">{(['new','cadence','attention','booked','closed'] as LeadStage[]).map((stage) => <article className={`pipeline-column ${stage} ${over === stage ? 'drop-target' : ''}`} key={stage} onDragOver={(event) => { event.preventDefault(); setOver(stage); }} onDragLeave={() => setOver((current) => current === stage ? null : current)} onDrop={(event) => { event.preventDefault(); void drop(stage); }}><header><StatusGlyph stage={stage} /><h2>{statusMeta[stage].label}</h2><small>{leads.filter((lead) => lead.stage === stage).length}</small></header><div className="lead-stack">{leads.filter((lead) => lead.stage === stage).map((lead) => <LeadCard lead={lead} key={lead.id} onOpen={() => router.push(`/leads/${lead.id}`)} dragging={dragging === lead.id} onDragStart={() => setDragging(lead.id)} onDragEnd={() => { setDragging(null); setOver(null); }} />)}{over === stage && dragging && <p className="drop-hint">{stage === 'new' ? 'Drop to restart outreach from day zero' : `Move to ${statusMeta[stage].label}`}</p>}</div></article>)}</section> :
-      <Panel><DataTable heads={['Lead', 'Status', 'Owner', 'Source', 'Next step', 'Last contact', '']} >{leads.map((lead) => <tr key={lead.id} className={`row-${lead.stage} ${lead.number_block ? 'row-blocked' : ''}`}><td><strong>{lead.full_name}</strong><small>{lead.display_id}</small></td><td><span className="card-tags"><StatusBadge stage={lead.stage} paused={lead.cadence_state === 'paused'} />{lead.number_block && <BlockedTag />}</span></td><td>{lead.owner ?? 'Unassigned'}</td><td>{sourceLabel(lead.source)}</td><td>{lead.next_step ?? 'No planned action'}</td><td>{relative(lead.last_contacted_at)}</td><td><Link className="row-link" href={`/leads/${lead.id}`} aria-label={`Open ${lead.full_name}`}>→</Link></td></tr>)}</DataTable></Panel>}</>;
+    {!leads.length ? <Panel><Empty title="No matching leads" body="Try another owner, location, or search term." /></Panel> : mode === 'board' ? <section className="pipeline">{(['new','cadence','attention','booked','closed'] as LeadStage[]).map((stage) => <article className={`pipeline-column ${stage} ${over === stage ? 'drop-target' : ''}`} key={stage} onDragOver={(event) => { event.preventDefault(); setOver(stage); }} onDragLeave={() => setOver((current) => current === stage ? null : current)} onDrop={(event) => { event.preventDefault(); void drop(stage); }}><header><StatusGlyph stage={stage} /><h2>{statusMeta[stage].label}</h2><small>{leads.filter((lead) => lead.stage === stage).length}</small></header><div className="lead-stack">{leads.filter((lead) => lead.stage === stage).map((lead) => <LeadCard lead={lead} key={lead.id} onOpen={() => router.push(`/leads/${lead.id}`)} onHover={() => prefetchLeadOnHover(lead.id, () => router.prefetch(`/leads/${lead.id}`))} dragging={dragging === lead.id} onDragStart={() => setDragging(lead.id)} onDragEnd={() => { setDragging(null); setOver(null); }} />)}{over === stage && dragging && <p className="drop-hint">{stage === 'new' ? 'Drop to restart outreach from day zero' : `Move to ${statusMeta[stage].label}`}</p>}</div></article>)}</section> :
+      <Panel><DataTable heads={['Lead', 'Status', 'Owner', 'Source', 'Next step', 'Last contact', '']} >{leads.map((lead) => <tr key={lead.id} className={`row-${lead.stage} ${lead.number_block ? 'row-blocked' : ''}`} onMouseEnter={() => prefetchLeadOnHover(lead.id)} onMouseLeave={cancelLeadPrefetch}><td><strong>{lead.full_name}</strong><small>{lead.display_id}</small></td><td><span className="card-tags"><StatusBadge stage={lead.stage} paused={lead.cadence_state === 'paused'} />{lead.number_block && <BlockedTag />}</span></td><td>{lead.owner ?? 'Unassigned'}</td><td>{sourceLabel(lead.source)}</td><td>{lead.next_step ?? 'No planned action'}</td><td>{relative(lead.last_contacted_at)}</td><td><Link className="row-link" href={`/leads/${lead.id}`} aria-label={`Open ${lead.full_name}`}>→</Link></td></tr>)}</DataTable></Panel>}</>;
 }
 
 function ReviewPage({ snapshot, action, onResolved, loading }: { snapshot: Snapshot; action: DashboardAction; onResolved: (id: string) => void; loading: boolean }) {
@@ -504,38 +530,19 @@ function AdministrationPage({ snapshot, action }: { snapshot: Snapshot; action: 
   return <><PageTitle title="Administration" subtitle="Manage organization-wide outreach settings." /><div className="admin-grid">{cards.map(([href,icon,title,body]) => <Link className="admin-card" href={href} key={href}><b>{icon}</b><div><h2>{title}</h2><p>{body}</p></div><span>→</span></Link>)}</div><Alert>Configuration changes are authenticated and recorded in the audit log. DNC rules cannot be bypassed.</Alert><div className="metric-grid"><Stat label="Cadence steps" value={String(snapshot.cadence.length)} /><Stat label="SMS templates" value={String(snapshot.templates.length)} /><Stat label="Review queue" value={String(snapshot.system.review_queue ?? 0)} /><Stat label="Pending updates" value={String(snapshot.system.provider_queue ?? 0)} /></div><BlockedNumbersPanel action={action} /></>;
 }
 
-type BlockedNumber = {
-  phone: string;
-  reason: string | null;
-  source: string | null;
-  blocked_at: string;
-  leads: Array<{ id: string; full_name: string; status: string }>;
-  open_lead_id: string | null;
-};
-
 // Every blocked number, including ones whose lead was deleted, so an admin can always release one.
 // A number that still has an open lead is unblocked from that lead's page (continue or start over).
 function BlockedNumbersPanel({ action }: { action: DashboardAction }) {
-  const [numbers, setNumbers] = useState<BlockedNumber[] | null>(null);
-  const [failed, setFailed] = useState(false);
+  const { data, error } = useCached(cacheKeys.blockedNumbers, cachedFetchers.blockedNumbers);
+  const numbers = data ? data.numbers ?? [] : null;
+  const failed = Boolean(error) && !data;
   const [confirming, setConfirming] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [reload, setReload] = useState(0);
-  useEffect(() => {
-    const controller = new AbortController();
-    dashboardFetch('/api/dashboard/blocked-numbers', { signal: controller.signal })
-      .then((response) => (response.ok ? (response.json() as Promise<{ numbers: BlockedNumber[] }>) : Promise.reject(new Error('blocked numbers unavailable'))))
-      .then((body) => { setNumbers(body.numbers ?? []); setFailed(false); })
-      .catch(() => { if (!controller.signal.aborted) setFailed(true); });
-    return () => controller.abort();
-  }, [reload]);
   async function unblock(phone: string) {
     setBusy(true);
     try {
-      if (await action('blocked-numbers/unblock', 'POST', { phone }, 'Number unblocked')) {
-        setConfirming(null);
-        setReload((n) => n + 1);
-      }
+      // The unblock write invalidates this list (and the snapshot), which refetches on its own.
+      if (await action('blocked-numbers/unblock', 'POST', { phone }, 'Number unblocked')) setConfirming(null);
     } finally { setBusy(false); }
   }
   if (failed) return <Panel title="Blocked numbers"><p className="muted">The blocked numbers could not be loaded right now.</p></Panel>;
@@ -567,9 +574,10 @@ function GlobalCadencePage({ snapshot, action, loading }: { snapshot: Snapshot; 
 }
 
 function CadenceStudio({ action, templates, loading = false }: { action: DashboardAction; templates: Array<Record<string, unknown>>; loading?: boolean }) {
-  const [versions, setVersions] = useState<CadenceVersion[]>([]);
-  const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [fetching, setFetching] = useState(true);
+  const versionsQuery = useCached(cacheKeys.cadenceVersions, cachedFetchers.cadenceVersions);
+  const versions = useMemo(() => versionsQuery.data?.versions ?? [], [versionsQuery.data]);
+  const [chosenId, setSelectedId] = useState<number | null>(null);
+  const fetching = versionsQuery.isLoading;
   const [creating, setCreating] = useState(false);
   const [activating, setActivating] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -577,26 +585,19 @@ function CadenceStudio({ action, templates, loading = false }: { action: Dashboa
   const [updatingStep, setUpdatingStep] = useState<number | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState('');
-  const [refresh, setRefresh] = useState(0);
-  const [error, setError] = useState('');
+  const error = versionsQuery.error ? 'Cadence versions could not be loaded.' : '';
 
-  useEffect(() => {
-    const controller = new AbortController();
-    dashboardFetch('/api/dashboard/cadence-versions', { signal: controller.signal })
-      .then((response) => response.ok ? response.json() as Promise<{ versions: CadenceVersion[] }> : Promise.reject())
-      .then((data) => {
-        setVersions(data.versions);
-        const scoped = data.versions;
-        const preferred = scoped.filter((version) => version.status !== 'deleted');
-        setSelectedId((current) => scoped.some((version) => version.id === current)
-          ? current
-          : (preferred.find((version) => version.status === 'draft') ?? preferred.find((version) => version.status === 'active') ?? preferred[0])?.id ?? null);
-        setError('');
-      })
-      .catch((cause) => { if (cause?.name !== 'AbortError') setError('Cadence versions could not be loaded.'); })
-      .finally(() => setFetching(false));
-    return () => controller.abort();
-  }, [refresh]);
+  // Keeps the staff member's choice while it still exists, otherwise the draft, then the active version.
+  const preferred = versions.filter((version) => version.status !== 'deleted');
+  const selectedId = versions.some((version) => version.id === chosenId)
+    ? chosenId
+    : (preferred.find((version) => version.status === 'draft') ?? preferred.find((version) => version.status === 'active') ?? preferred[0])?.id ?? null;
+
+  // Every write below goes through action(), which already invalidates this list and refetches it;
+  // these optimistic edits only bridge the moment until the server's answer lands.
+  function setVersions(change: (current: CadenceVersion[]) => CadenceVersion[]) {
+    if (versionsQuery.data) versionsQuery.mutate((current) => ({ ...current!, versions: change(current!.versions) }));
+  }
 
   const scoped = versions.filter((version) => version.status !== 'deleted');
   const deleted = versions.filter((version) => version.status === 'deleted');
@@ -640,10 +641,7 @@ function CadenceStudio({ action, templates, loading = false }: { action: Dashboa
     setDeleting(true);
     try {
       const removed = await action(`cadence-versions/${selected.id}`, 'DELETE') as unknown as CadenceVersion | null;
-      if (removed?.status === 'deleted') {
-        setSelectedId(scoped.find((version) => version.id !== selected.id)?.id ?? null);
-        setRefresh((value) => value + 1);
-      }
+      if (removed?.status === 'deleted') setSelectedId(scoped.find((version) => version.id !== selected.id)?.id ?? null);
     } finally {
       setDeleting(false);
     }
@@ -654,9 +652,7 @@ function CadenceStudio({ action, templates, loading = false }: { action: Dashboa
     if (!window.confirm(`Activate ${selected.name}?\n\nNew leads will start on it. Leads already in outreach stay on the version they started with.`)) return;
     setActivating(true);
     try {
-      if (await action(`cadence-versions/${selected.id}/activate`, 'POST')) {
-        setRefresh((value) => value + 1);
-      }
+      await action(`cadence-versions/${selected.id}/activate`, 'POST');
     } finally {
       setActivating(false);
     }
@@ -686,7 +682,6 @@ function CadenceStudio({ action, templates, loading = false }: { action: Dashboa
       if (removed?.status === 'permanently_deleted') {
         setVersions((current) => current.filter((item) => item.id !== version.id));
         if (selectedId === version.id) setSelectedId(scoped[0]?.id ?? null);
-        setRefresh((value) => value + 1);
       }
     } finally {
       setHardDeleting(null);
@@ -694,7 +689,7 @@ function CadenceStudio({ action, templates, loading = false }: { action: Dashboa
   }
 
   if (loading || fetching) return <Panel title="Loading cadence versions"><SkeletonRows rows={5} /></Panel>;
-  if (error) return <Panel title="Cadence unavailable"><Alert tone="warning">{error}</Alert><button className="secondary" type="button" onClick={() => { setFetching(true); setRefresh((value) => value + 1); }}>Retry connection</button></Panel>;
+  if (error) return <Panel title="Cadence unavailable"><Alert tone="warning">{error}</Alert><button className="secondary" type="button" disabled={versionsQuery.isValidating} onClick={() => void versionsQuery.revalidate()}>Retry connection</button></Panel>;
 
   if (!selected) return <Panel><Empty title="No cadence configured" body="Create and seed an active global cadence before adding versions." /></Panel>;
 
@@ -705,7 +700,7 @@ function CadenceStudio({ action, templates, loading = false }: { action: Dashboa
     </div>
     <div className="version-toolbar"><div>{renameValue ? <label className="version-name-editor"><span className="sr-only">Version name</span><input autoFocus value={renameValue} maxLength={120} onChange={(event) => setRenameValue(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') saveName(); if (event.key === 'Escape') setRenameValue(''); }} /></label> : <strong>{selected.name}</strong>}<small>{selected.status === 'deleted' ? 'This complete version is retained and can be reused as a new draft.' : 'Use the Status column to enable or disable steps. Create a draft for timing, channel, or wording changes.'}</small></div><div className="version-toolbar-actions">{renameValue ? <><button className="secondary" type="button" disabled={renaming || !renameValue.trim()} onClick={saveName}>{renaming ? 'Saving…' : 'Save name'}</button><button className="secondary" type="button" onClick={() => setRenameValue('')}>Cancel</button></> : <button className="secondary" type="button" onClick={() => setRenameValue(selected.name)}>Rename</button>}{selected.status === 'deleted' ? <button className="primary" type="button" disabled={creating} onClick={() => cloneVersion(selected)}>{creating ? 'Creating…' : 'Reuse as new draft'}</button> : <button className="danger-button" type="button" disabled={selected.status === 'active' || deleting} onClick={deleteVersion}>{deleting ? 'Deleting…' : 'Delete version'}</button>}</div></div>
     {selected.status === 'draft'
-      ? <CadenceEditor key={`${selected.id}-${selected.name}`} version={selected} templates={templates} action={action} onChanged={() => setRefresh((value) => value + 1)} />
+      ? <CadenceEditor key={`${selected.id}-${selected.name}`} version={selected} templates={templates} action={action} />
       : <div className="two-col wide-left"><Panel title={selected.name}><CadenceStepsTable steps={selected.steps} onToggle={selected.status === 'deleted' ? undefined : togglePublishedStep} updatingStep={updatingStep} /></Panel><div className="stack"><Panel title="Version details"><dl className="detail-list"><div><dt>Status</dt><dd><StatusText status={cadenceStatusLabel(selected.status)} /></dd></div><div><dt>Version</dt><dd>v{selected.version_number}</dd></div><div><dt>Scope</dt><dd>Global default</dd></div><div><dt>Steps</dt><dd>{selected.steps.length}</dd></div></dl><div className="version-detail-actions">{selected.status === 'archived' && <button className="primary full" type="button" disabled={activating} onClick={activatePreviousVersion}>{activating ? 'Activating…' : 'Activate this version'}</button>}<button className={selected.status === 'archived' ? 'secondary full' : 'primary full'} type="button" disabled={creating || activating} onClick={() => cloneVersion(selected)}>{creating ? 'Creating…' : selected.status === 'deleted' ? 'Reuse as new draft' : 'Create editable draft'}</button></div><p className="control-note">Status changes apply when this version starts or restarts. Current lead schedules stay unchanged. Create a draft for every other edit.</p></Panel><Panel title="Guardrails"><ul className="check-list"><li>✓ DNC enforced</li><li>✓ Call opt-out enforced</li><li>✓ Business-hour windows</li><li>✓ Audited changes</li></ul></Panel></div></div>}
   </section><aside className="deleted-versions"><header><div><h2>Deleted versions</h2><p>Review, reuse, or permanently remove</p></div><span>{deleted.length}</span></header>{deleted.length ? <div className="deleted-version-list">{deleted.map((version) => <article className={version.id === selected.id ? 'selected' : ''} key={version.id}><button type="button" className="deleted-version-select" aria-pressed={version.id === selected.id} onClick={() => { setSelectedId(version.id); setRenameValue(''); }}><strong>{version.name}</strong><small>Deleted {version.deleted_at ? date(version.deleted_at) : 'recently'}</small><span>v{version.version_number} · {version.steps.length} steps</span></button>{<button className="permanent-delete" type="button" disabled={hardDeleting !== null} onClick={() => permanentlyDeleteVersion(version)} aria-label={`Permanently delete ${version.name}`}>{hardDeleting === version.id ? 'Deleting…' : 'Permanently delete'}</button>}</article>)}</div> : <p className="deleted-empty">Deleted cadence versions will appear here.</p>}</aside></div>;
 }
@@ -718,7 +713,7 @@ function CadenceStepsTable({ steps, onToggle, updatingStep }: { steps: CadenceSt
   return <DataTable heads={['Step','Day','Action','Channel','Status']}>{steps.map((step,index)=><tr key={step.id ?? index}><td><span className="step-number">{index+1}</span></td><td>Day {step.day_offset}</td><td><strong>{cadenceStepName(step)}</strong>{step.channel === 'sms' && <small className="step-copy">{step.sms_body}</small>}</td><td>{step.channel === 'call' ? 'Phone call' : 'Text message'}</td><td>{onToggle ? <label className="cadence-status-toggle"><input type="checkbox" checked={step.is_active} disabled={updatingStep !== null} onChange={(event) => void onToggle(step, event.target.checked)} /><span>{updatingStep === step.id ? 'Saving…' : step.is_active ? 'Active' : 'Disabled'}</span></label> : <StatusText status={step.is_active ? 'Active' : 'Disabled'} />}</td></tr>)}</DataTable>;
 }
 
-function CadenceEditor({ version, templates, action, onChanged }: { version: CadenceVersion; templates: Array<Record<string, unknown>>; action: DashboardAction; onChanged: (activated: boolean) => void }) {
+function CadenceEditor({ version, templates, action }: { version: CadenceVersion; templates: Array<Record<string, unknown>>; action: DashboardAction }) {
   const [name, setName] = useState(version.name);
   const [steps, setSteps] = useState<CadenceStep[]>(() => version.steps.map((step) => ({ ...step, description: cadenceStepName(step) })));
   const [selectedStep, setSelectedStep] = useState(0);
@@ -743,7 +738,8 @@ function CadenceEditor({ version, templates, action, onChanged }: { version: Cad
     setSaving(true);
     try {
       const saved = await action(`cadence-versions/${version.id}`, 'PUT', { name: name.trim(), steps: steps.map((step) => ({ day_offset: step.day_offset, channel: step.channel, description: cadenceStepName(step), is_active: step.is_active, sms_body: step.channel === 'sms' ? step.sms_body : null })) });
-      if (saved && (!activate || await action(`cadence-versions/${version.id}/activate`, 'POST'))) onChanged(activate);
+      // Each write refreshes the version list itself (see dashboardFetch), so no callback is needed.
+      if (saved && activate) await action(`cadence-versions/${version.id}/activate`, 'POST');
     } finally { setSaving(false); }
   }
   return <Panel title="Draft cadence editor"><div className="cadence-editor">
@@ -1190,7 +1186,7 @@ function LeadActivityPage({ detail }: { detail: LeadDetail }) {
 function ConversationTabs({ id, active }: { id:string; active:'sms'|'calls' }) { return <nav className="conversation-tabs" aria-label="Conversations"><Link className={active==='sms'?'active':''} aria-current={active === 'sms' ? 'page' : undefined} href={`/leads/${id}/conversations/sms`}><MessageIcon />SMS</Link><Link className={active==='calls'?'active':''} aria-current={active === 'calls' ? 'page' : undefined} href={`/leads/${id}/conversations/calls`}><PhoneIcon />Call transcripts</Link></nav>; }
 // A flagged lead shows why it was flagged: its next step is on hold until staff
 // act, so the reason is what the card has to say.
-function LeadCard({ lead, onOpen, dragging = false, onDragStart, onDragEnd }: { lead: Lead; onOpen:()=>void; dragging?: boolean; onDragStart?: ()=>void; onDragEnd?: ()=>void }) { const meta=statusMeta[lead.stage]; return <button className={`lead-card ${dragging ? 'is-dragging' : ''} ${lead.number_block ? 'is-blocked' : ''}`} type="button" draggable onDragStart={(event) => { setLeadDragData(event, lead.id); onDragStart?.(); }} onDragEnd={onDragEnd} onClick={onOpen}><strong>{lead.full_name}</strong><span className="location"><MapPinIcon />{lead.location ?? 'Not assigned'}</span><span className="card-tags"><StatusBadge stage={lead.stage} paused={lead.cadence_state === 'paused'} />{lead.number_block && <BlockedTag />}</span>{lead.stage==='cadence'&&lead.cadence_state!=='paused'&&<span className="version">{lead.cadence_version_name ?? 'Cadence'} · {lead.cadence_progress ?? 0} of {lead.cadence_total ?? 0}</span>}{lead.stage === 'attention' && lead.review_reason ? <span className="next attention-reason">Reason: {operationalMessage(lead.review_reason)}</span> : <span className="next">{lead.stage === 'closed' || lead.stage === 'booked' ? 'Outcome' : 'Next'}: {lead.next_step ?? 'No planned action'}</span>}<span className="sr-only">{meta.label}</span></button>; }
+function LeadCard({ lead, onOpen, onHover, dragging = false, onDragStart, onDragEnd }: { lead: Lead; onOpen:()=>void; onHover?: ()=>void; dragging?: boolean; onDragStart?: ()=>void; onDragEnd?: ()=>void }) { const meta=statusMeta[lead.stage]; return <button className={`lead-card ${dragging ? 'is-dragging' : ''} ${lead.number_block ? 'is-blocked' : ''}`} type="button" draggable onMouseEnter={onHover} onMouseLeave={cancelLeadPrefetch} onDragStart={(event) => { setLeadDragData(event, lead.id); onDragStart?.(); }} onDragEnd={onDragEnd} onClick={onOpen}><strong>{lead.full_name}</strong><span className="location"><MapPinIcon />{lead.location ?? 'Not assigned'}</span><span className="card-tags"><StatusBadge stage={lead.stage} paused={lead.cadence_state === 'paused'} />{lead.number_block && <BlockedTag />}</span>{lead.stage==='cadence'&&lead.cadence_state!=='paused'&&<span className="version">{lead.cadence_version_name ?? 'Cadence'} · {lead.cadence_progress ?? 0} of {lead.cadence_total ?? 0}</span>}{lead.stage === 'attention' && lead.review_reason ? <span className="next attention-reason">Reason: {operationalMessage(lead.review_reason)}</span> : <span className="next">{lead.stage === 'closed' || lead.stage === 'booked' ? 'Outcome' : 'Next'}: {lead.next_step ?? 'No planned action'}</span>}<span className="sr-only">{meta.label}</span></button>; }
 function StatusTiles({ counts, loading = false }: { counts: Record<LeadStage,number>; loading?: boolean }) { return <section className="status-tiles" aria-busy={loading}>{(['new','cadence','attention','booked','closed'] as LeadStage[]).map((stage)=><Link className={stage} href={`/leads?stage=${stage}`} key={stage}>{stage !== 'new' && <StatusGlyph stage={stage} size="large" />}<div><small>{statusMeta[stage].label}</small><strong>{loading ? "—" : counts[stage]}</strong></div></Link>)}</section>; }
 // Blocked leads stay in Closed (nothing for staff to fix), but read as blocked
 // at a glance rather than as one more closed lead.
