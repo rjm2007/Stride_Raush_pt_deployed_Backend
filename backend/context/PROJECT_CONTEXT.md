@@ -239,3 +239,11 @@ the worker sent nothing while the page said "Pause cadence". Nothing recorded wh
   `leads.sheet_name_accepted` is cleared, so the same new name typed again opens a new review.
 - A pre-048 name review takes its new name from the Name the Sheet worker last read (`_legacy_sheet_name`), so
   "keep old name" on it also writes the name on file back (`test_legacy_name_review_keep_old_name_...`).
+
+### 2026-10-23 — Replaced-by-newer-row wording; "sure" then a hang-up (ports of demo 6ccc0e6, 25a3caf)
+- One lead per phone number: the older lead's row now reads "Closed: a newer row has this phone number"
+  (`sheet_sync.SHEET_REPLACED`), its card "Replaced: a newer Sheet row has this phone number", and its lead
+  page an info note. Before, the row kept its last words (e.g. "Resolved: old name kept") under Closed.
+- `delivery._patient_replied_after(introduction=True)` needs a reply after the introduction that is more
+  than agreement or filler (`_AGREEMENT_WORDS`): "Yes", "Sure", then a hang-up is no longer applied as
+  declined from the call summary (becomes no_answer, outreach continues). "No." still counts.

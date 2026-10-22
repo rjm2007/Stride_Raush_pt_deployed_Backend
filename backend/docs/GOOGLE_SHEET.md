@@ -105,6 +105,7 @@ was chosen. No new columns: only the words in the existing cells. Lead Status ke
 | `Closed: handled by front desk` | outreach stopped, the front desk takes over |
 | `Closed: wrong number` / `Closed: different person, add a new row` | lead closed for good |
 | `Phone changed: add a new row` | phone edited in the Sheet (see above) |
+| `Closed: a newer row has this phone number` | a newer row with the same phone took over (one lead per phone number) |
 
 A row in review (Outcome Status `Needs review: …` or `Number blocked; needs review`, 2026-10-23):
 
