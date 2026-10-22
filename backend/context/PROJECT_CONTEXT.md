@@ -205,3 +205,18 @@ the worker sent nothing while the page said "Pause cadence". Nothing recorded wh
   is recorded). Any phone_changed record blocks restart/resume on the old number, however it was settled.
   "Try texting again" chosen while another review is open is planned when the lead finally resumes.
   Pause is refused on a closed lead like Resume.
+
+### 2026-10-23 — Sheet: commands typed on a row in review (port of demo 392b9ff)
+- QA (demo): a Booked typed on a "Needs review: wrong number" row was ignored without a word, and resolving
+  "Number is right" then wrote "Start cadence" over it: the lead was never booked and calls restarted.
+- On a row whose Outcome Status is a review text this backend writes ("Needs review: ...", "Number blocked;
+  needs review"), Booked and Do Not Contact run as on any row and close the review ("booked" /
+  "do_not_contact"). Old n8n texts ("Phone number changed; needs review") still block every command.
+- Restart cadence on such a row waits: the row says "<review text>; resolve it on the dashboard first, then
+  the restart runs" and keeps the Action; it runs once the review is resolved. It is dropped when the
+  dashboard ends the lead (close choices, front desk, board Booked, Do not contact, phone change): Outcome
+  Status "<result>; the Restart in Action was not run", Action reset. Clearing Action removes the words.
+- The backend never leaves a Restart next to a review text it writes (a flag, or a Restart that ends in
+  "Number blocked; needs review", turns it into "Start cadence"), so a Restart there was typed by staff.
+- `apply_snapshot` decides on the row before it writes: Action is never written over a command staff typed
+  that has not run, nor over a waiting Restart. Tests: `test_sheet_direct.py`, `test_lead_review_integration.py`.

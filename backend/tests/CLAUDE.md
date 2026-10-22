@@ -25,7 +25,7 @@ then `rpt migrate` and `rpt seed` with `SUPABASE_DB_URL` set to the same local U
 | `test_number_block_integration.py` | Block / unblock a number end to end |
 | `test_delivery.py`, `test_unspoken_call.py`, `test_last_decision.py` | Vapi end-of-call settlement, outcomes, booking-link text |
 | `test_review_pause.py`, `test_callback_timing.py` | Review/pause behaviour, callback scheduling |
-| `test_lead_review.py`, `test_lead_review_integration.py` | Review codes/choices/Sheet words; every group's choices end to end, no Resume/board shortcut, history, phone change closes, calls only never texts |
+| `test_lead_review.py`, `test_lead_review_integration.py` | Review codes/choices/Sheet words; every group's choices end to end, no Resume/board shortcut, history, phone change closes, calls only never texts; Booked / Do Not Contact / Restart typed on a flagged Sheet row |
 | `test_security.py` | Dashboard headers, Vapi/Twilio auth |
 | `test_api_contract.py`, `test_vapi_contract.py`, `test_vapi_tool_config.py` | HTTP and Vapi contracts; the committed agent backup matches this backend; no booking routes |
 | `test_retry.py` | Retry delays and production startup checks (no Stride/Keap/n8n secret needed) |

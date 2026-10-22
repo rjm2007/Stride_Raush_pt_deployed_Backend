@@ -105,11 +105,29 @@ was chosen. No new columns: only the words in the existing cells. Lead Status ke
 | `Closed: wrong number` / `Closed: different person, add a new row` | lead closed for good |
 | `Phone changed: add a new row` | phone edited in the Sheet (see above) |
 
-A `Needs review: …` text blocks every command on the row (as before). With a `Resolved: …` / `Closed: …`
-text the backend also sets Action to `Start cadence`, so a stale `Restart cadence` or `Booked` never runs
-again by itself; picking a command in Action afterwards runs it once. These texts are written once, when
-the review is flagged or resolved, and never over a command typed in the row that has not run yet;
-later updates leave the cell alone. A lead whose phone changed can never be restarted on the old number,
+A row in review (Outcome Status `Needs review: …` or `Number blocked; needs review`, 2026-10-23):
+
+- `Booked` and `Do Not Contact` typed in Action run as on any row. The lead is booked / its number
+  blocked, and the review closes ("booked" / "do_not_contact", by Google Sheet).
+- `Restart cadence` waits for the review. The row says `<review text>; resolve it on the dashboard
+  first, then the restart runs` and Action keeps the typed text. Once the review is resolved the Restart
+  runs (10-minute cooldown and the usual refusals still apply). If the dashboard ends the lead instead
+  (front desk, wrong number close, board Booked, Do not contact, phone change), the Restart is dropped:
+  Outcome Status reads `<result>; the Restart in Action was not run` (a final `Booked` / `Do Not
+  Contact applied` stays as is) and Action is reset. Clearing Action removes the waiting words on the
+  next poll.
+- `Start cadence` never runs on a linked row (it is the value the system writes after a resolution).
+- The backend never leaves `Restart cadence` next to a review text it writes (on a flag, or a Restart
+  that ends in `Number blocked; needs review`, Action becomes `Start cadence`), so a Restart next to a
+  review text was typed by staff.
+- Older texts that do not start this way (e.g. `Phone number changed; needs review`) still block every
+  command.
+
+With a `Resolved: …` / `Closed: …` text the backend also sets Action to `Start cadence`, so a stale
+`Restart cadence` or `Booked` never runs again by itself; picking a command in Action afterwards runs it
+once. These texts are written once, when the review is flagged or resolved, and Action is never written
+over a command typed in the row that has not run yet (nor over a waiting Restart); later updates leave
+the cell alone. A lead whose phone changed can never be restarted on the old number,
 even if it was Booked or the old number is typed back.
 
 ## To run a command again
