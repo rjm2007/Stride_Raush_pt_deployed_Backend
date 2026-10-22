@@ -53,7 +53,9 @@ export function statusTone(value: unknown): StatusTone {
 export type ActivityKind = 'appointment' | 'link' | 'handoff' | 'call' | 'message' | 'created' | 'closed' | 'history';
 export function teamActivity(entries: ActivityEntry[], query = '') {
   const search = query.trim().toLowerCase();
-  return entries.filter((entry) => entry.actor_type === 'employee' &&
+  // Review flags and resolutions show too, also when the system raised or closed them (2026-10-22:
+  // staff could not see why a lead was flagged or who resolved it).
+  return entries.filter((entry) => (entry.actor_type === 'employee' || entry.category === 'review') &&
     `${entry.title} ${entry.actor_name} ${entry.action} ${Object.values(entry.details).join(' ')}`.toLowerCase().includes(search));
 }
 

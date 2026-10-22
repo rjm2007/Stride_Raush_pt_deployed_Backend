@@ -30,6 +30,43 @@ export type Lead = {
   lead_type?: 'Physical Therapy' | 'Wellness';
   is_test?: boolean;
   number_block?: NumberBlock | null;
+  // The open review (needs_review), with the choices staff can make. Null when nothing is open.
+  review?: Review | null;
+  // Staff chose "Continue with calls only": no text goes to this lead.
+  texts_off?: boolean;
+};
+
+export type ReviewGroup = 'name' | 'phone' | 'text' | 'call' | 'technical' | 'blocked' | 'other';
+
+export type ReviewChoice =
+  | 'use_new_name' | 'keep_old_name' | 'different_person' | 'calls_only' | 'retry_texts'
+  | 'number_ok' | 'wrong_number' | 'continue' | 'close_phone_changed' | 'front_desk';
+
+// One flag as the backend describes it (services/lead_review.py `describe`).
+export type Review = {
+  id: number | null;
+  code: string;
+  group: ReviewGroup;
+  group_label: string;
+  title: string;
+  reason: string;
+  proof: Array<{ label: string; value: string }>;
+  flagged_at: string | null;
+  source: string | null;
+  source_label: string;
+  landline: boolean;
+  transcript_url: string | null;
+  options: Array<{ choice: ReviewChoice; label: string }>;
+  open_count?: number;
+  also?: Array<{ title: string; flagged_at: string | null }>;
+};
+
+// GET /review/{lead_id}: what each choice will do, for the confirm pop-up.
+export type ReviewPreview = {
+  lead_id: string;
+  full_name: string;
+  review: Review | null;
+  options: Array<{ choice: ReviewChoice; label: string; effect: string; next_step: string; confirm: string }>;
 };
 
 // Set when the lead's phone is on the do-not-contact list. Calls and texts to
@@ -115,7 +152,7 @@ export type ActivityEntry = {
   occurred_at: string;
   actor_type: 'employee' | 'automation';
   actor_name: string;
-  category: 'employee' | 'calls' | 'messages' | 'cadence';
+  category: 'employee' | 'calls' | 'messages' | 'cadence' | 'review';
   title: string;
   details: Record<string, unknown>;
 };

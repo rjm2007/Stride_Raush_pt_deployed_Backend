@@ -75,8 +75,42 @@ affected; the dashboard stays correct.
 ## Edits to an existing row
 
 Name, Phone Number, Email, Date Of Birth, Location and Case edits on a linked row are synced every 5
-minutes. A changed **name or phone number** is not applied silently: the lead is flagged for review
-(`Phone number changed; needs review`, `Name changed; needs review`, …) and staff decide on the dashboard.
+minutes. Email, Date Of Birth, Location and Case are applied. Name and phone are not applied silently:
+
+- **Phone Number changed** (alone or with the name): the old lead is **closed at once** and can never be
+  resumed or restarted (Lead Status `Closed`, Outcome Status `Phone changed: add a new row`, Action set to
+  `Start cadence`). Add the new number as a **new row**. The dashboard keeps the reason ("Phone number
+  changed in the Sheet from …8847 to …1234 on Oct 21, 2026").
+- **Name changed**: the lead pauses for review (`Needs review: name changed`). On the dashboard staff
+  choose: use the new name, keep the old name (that exact Sheet name is then remembered and never
+  flagged again), or different person (lead closed; add a new row).
+
+## Review texts (Outcome Status)
+
+When a lead needs review the Outcome Status says why; when staff resolve it on the dashboard it says what
+was chosen. No new columns: only the words in the existing cells. Lead Status keeps its seven values.
+
+| Outcome Status | When |
+| --- | --- |
+| `Needs review: name changed` | Name edited in the Sheet |
+| `Needs review: text failed (landline)` / `Needs review: text failed` | a cadence text was not delivered (Twilio 30006/21614 = landline) |
+| `Needs review: wrong number` | the person on the call said it is the wrong number or not the patient |
+| `Needs review: call result unclear` | call answered with no usable outcome |
+| `Needs review: not confirmed` | a call or text whose result never came back (never retried automatically) |
+| `Number blocked; needs review` | the number is on the blocked list |
+| `Resolved: new name used` / `Resolved: old name kept` | name review resolved, cadence continues |
+| `Resolved: calls only` | texts off for this lead, calls continue; Message Outcome shows `Calls only (texts off)` |
+| `Resolved: texting again` / `Resolved: number confirmed` / `Resolved: continued` | cadence continues |
+| `Closed: handled by front desk` | outreach stopped, the front desk takes over |
+| `Closed: wrong number` / `Closed: different person, add a new row` | lead closed for good |
+| `Phone changed: add a new row` | phone edited in the Sheet (see above) |
+
+A `Needs review: …` text blocks every command on the row (as before). With a `Resolved: …` / `Closed: …`
+text the backend also sets Action to `Start cadence`, so a stale `Restart cadence` or `Booked` never runs
+again by itself; picking a command in Action afterwards runs it once. These texts are written once, when
+the review is flagged or resolved, and never over a command typed in the row that has not run yet;
+later updates leave the cell alone. A lead whose phone changed can never be restarted on the old number,
+even if it was Booked or the old number is typed back.
 
 ## To run a command again
 

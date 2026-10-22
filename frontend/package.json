@@ -11,7 +11,7 @@
     "start": "next start",
     "lint": "eslint . --ignore-pattern .next",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test app/display.test.ts app/cadence.test.ts app/session.test.ts app/dashboard-client.test.ts app/dashboard-origin.test.ts app/query-cache.test.ts app/assistant-store.test.ts",
+    "test": "node --experimental-strip-types --test app/display.test.ts app/cadence.test.ts app/session.test.ts app/dashboard-client.test.ts app/dashboard-origin.test.ts app/query-cache.test.ts app/assistant-store.test.ts app/review.test.ts",
     "test:display": "node --experimental-strip-types --test app/display.test.ts",
     "test:cadence": "node --experimental-strip-types --test app/cadence.test.ts",
     "test:auth": "node --experimental-strip-types --test app/session.test.ts",

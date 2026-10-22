@@ -380,3 +380,20 @@ def test_testing_mode_vapi_number_wins_over_the_database_setting():
     source = inspect.getsource(worker.claim_jobs)
     first = source.index("testing_vapi_phone_number_id()")
     assert first < source.index('context["vapi_phone_number_id"]')
+
+
+def test_claim_never_texts_a_calls_only_lead():
+    """Staff chose "Continue with calls only" (a landline, 2026-10-21): no text may be claimed."""
+    assert "not l.sms_disabled" in " ".join(CLAIM_SQL.split())
+
+
+def test_a_refused_text_becomes_a_text_review_with_twilios_code():
+    from rpt_agent.worker import Job, _dispatch_review
+
+    job = Job(9, "lead-1", "sms", "+15550000000", "Asha", "Hi", None, 0, None, None)
+    review = _dispatch_review(job, "failed", "twilio returned HTTP 400 (Twilio error 21614)")
+    assert review["code"] == "sms_failed" and review["details"]["error_code"] == "21614"
+    assert review["outreach_event_id"] == 9
+    call = Job(10, "lead-1", "call", "+15550000000", "Asha", None, None, 3, None, None)
+    assert _dispatch_review(call, "failed", "vapi returned HTTP 400")["code"] == "call_failed"
+    assert _dispatch_review(call, "unknown", "timed out")["code"] == "dispatch_unconfirmed"

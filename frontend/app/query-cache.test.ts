@@ -128,7 +128,7 @@ test('each staff action invalidates the reads it can change', () => {
   for (const action of ['cadence', 'stage', 'contact-rules', 'sms', 'outreach-events/7']) {
     assert.deepEqual(mutationTargets(`/api/dashboard/leads/abc-123/${action}`, 'POST').keys, [SNAPSHOT, LEAD, blocked], action);
   }
-  assert.deepEqual(mutationTargets('/api/dashboard/review/abc-123/resolve', 'POST').keys, [SNAPSHOT, LEAD]);
+  assert.deepEqual(mutationTargets('/api/dashboard/review/abc-123/resolve', 'POST').keys, [SNAPSHOT, LEAD, '/api/dashboard/blocked-numbers']);
   assert.deepEqual(mutationTargets('/api/dashboard/blocked-numbers/unblock', 'POST'), { keys: [SNAPSHOT, blocked], prefixes: ['/api/dashboard/leads/'], drop: [] });
   assert.deepEqual(mutationTargets('/api/dashboard/cadence-versions/3/activate', 'POST').keys, [SNAPSHOT, versions]);
   assert.deepEqual(mutationTargets('/api/dashboard/cadence-steps/9', 'PATCH').keys, [SNAPSHOT, versions]);

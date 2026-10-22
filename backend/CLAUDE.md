@@ -37,7 +37,7 @@ CLI: `rpt migrate | verify | seed | tick | test-lead | sheet-check | sheet-archi
 | `src/rpt_agent/routes/` | FastAPI routers (thin HTTP layer) | yes |
 | `src/rpt_agent/services/` | Business workflows and provider clients | yes |
 | `src/rpt_agent/agent/` | Read-only staff assistant (LangChain + OpenAI), off in production | yes |
-| `supabase/` | Ordered SQL migrations (same 001–045 as demo), seed, dev SQL, one-time prod SQL | yes |
+| `supabase/` | Ordered SQL migrations (001–045 and 048; demo also has 046–047 for Keap), seed, dev SQL, one-time prod SQL | yes |
 | `tests/` | pytest suite (unit, contract, scenario; DB tests on a local Postgres) | yes |
 | `config/` | Backup of the live outreach voice agent (prompt, settings, tools; secrets masked) | yes |
 | `scripts/` | `vapi_export.py` (back up the agent), Sheet load test, usage report | yes |

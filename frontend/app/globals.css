@@ -1013,8 +1013,10 @@ tr.row-booked td:first-child { border-left: 3px solid var(--green); }
 .assistant-fab.is-armed { transform: scale(1.12); outline: 3px dashed #fff; outline-offset: 4px; }
 .assistant-fab b { position: absolute; top: -4px; right: -4px; min-width: 20px; height: 20px; border-radius: 10px; background: var(--orange); color: #fff; font-size: 11px; font-weight: 800; display: grid; place-items: center; padding: 0 5px; border: 2px solid var(--paper); }
 .assistant-fab-hint { position: absolute; right: 66px; white-space: nowrap; background: var(--ink); color: var(--paper); font-size: 12px; font-weight: 650; padding: 6px 10px; border-radius: 7px; }
-.assistant-pop { position: fixed; right: 24px; bottom: 92px; z-index: 30; width: min(400px, calc(100vw - 32px)); height: min(600px, calc(100vh - 120px)); border: 1px solid var(--line); border-radius: 14px; background: var(--paper); box-shadow: 0 24px 60px #10182840; overflow: hidden; display: grid; }
+/* 196px = 92px bottom offset + 88px top bar + 16px gap: the popover always ends below the top bar (z-index 35). */
+.assistant-pop { position: fixed; right: 24px; bottom: 92px; z-index: 30; width: min(400px, calc(100vw - 32px)); height: min(600px, calc(100vh - 196px)); height: min(600px, calc(100dvh - 196px)); border: 1px solid var(--line); border-radius: 14px; background: var(--paper); box-shadow: 0 24px 60px #10182840; overflow: hidden; display: grid; }
 [data-theme="dark"] .assistant-pop { box-shadow: 0 24px 60px #00000080; }
+@media (max-width: 520px) { .assistant-pop { right: 12px; width: min(400px, calc(100vw - 86px)); } } /* clear the 62px sidebar rail, like .toast */
 .assistant-chat { display: grid; grid-template-rows: auto auto 1fr auto auto; min-height: 0; height: 100%; }
 .assistant-chat.is-over { outline: 2px dashed var(--blue); outline-offset: -2px; }
 .assistant-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
@@ -1216,3 +1218,16 @@ button.assistant-logo:hover { box-shadow: 0 0 0 3px #0b50d033; }
 .lead-card .booked-on { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 @media(max-width:1100px) { .appointment-breakdown { grid-template-columns: 1fr; } }
 @media(max-width:700px) { .appointment-totals { grid-template-columns: repeat(2,minmax(0,1fr)); } .appointment-totals .total { grid-column: 1/-1; } .booking-card { grid-template-columns: 1fr; } .calendar-summary { padding: 10px 12px; } .calendar-summary .by-tag { margin-left: 0; } }
+
+/* Review cards and the resolve pop-up (2026-10-22). */
+.review-card { display: grid; gap: 12px; }
+.review-card > header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.review-card .review-group { --status: var(--amber); --wash: #fff8eb; }
+.review-reason { margin: 0; line-height: 1.5; }
+.review-proof > div { padding: 10px 0; }
+.review-options { display: grid; gap: 8px; }
+.review-options button { width: 100%; justify-content: center; }
+.review-dialog-body { padding: 22px 24px; }
+.resolve-summary { display: grid; gap: 6px; margin-bottom: 16px; }
+.resolve-dialog textarea { width: 100%; min-height: 80px; border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--paper); color: var(--ink); font: inherit; }
+.status-pill.texts-off { --status: var(--ink-2); --wash: var(--paper); }

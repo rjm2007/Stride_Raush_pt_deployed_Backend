@@ -85,3 +85,12 @@ test('unblock suggests continuing after a short block and starting over after a 
 test('names a blocked number as the reason a new lead waits', () => {
   assert.match(operationalMessage('Number blocked: this number asked not to be contacted. Unblock it to start outreach.'), /^Number blocked/);
 });
+
+test('activity shows review flags and resolutions, also automated ones', () => {
+  const entries = [
+    { id: 'f', action: 'review.flagged', occurred_at: '2026-10-21T16:00:00Z', actor_type: 'automation' as const, actor_name: 'Automation', category: 'review' as const, title: 'Flagged: Text not delivered', details: {} },
+    { id: 'r', action: 'review.resolved', occurred_at: '2026-10-21T17:00:00Z', actor_type: 'employee' as const, actor_name: 'Emma', category: 'review' as const, title: 'Resolved by Emma: Continue with calls only.', details: {} },
+    { id: 'o', action: 'outreach.delivered', occurred_at: '2026-10-21T15:00:00Z', actor_type: 'automation' as const, actor_name: 'Automation', category: 'messages' as const, title: 'SMS delivered', details: {} },
+  ];
+  assert.deepEqual(teamActivity(entries).map((item) => item.id), ['f', 'r']);
+});

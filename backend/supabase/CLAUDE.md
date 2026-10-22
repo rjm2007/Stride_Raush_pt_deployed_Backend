@@ -5,7 +5,7 @@ client). Production: the client's project `taimrfktweamsnbbatux` (Singapore, ap-
 
 | Path | Purpose |
 | --- | --- |
-| `migrations/NNN_name.sql` | Ordered, idempotent schema changes 001 … 045, **identical to the demo repo**. `rpt migrate` applies any file not yet recorded in `public.schema_migrations`, in filename order. |
+| `migrations/NNN_name.sql` | Ordered, idempotent schema changes 001 … 045 and 048, **same file names as the demo repo** (demo also has 046_keap_male_booked_tag and 047_lead_gender, not applied here yet). `rpt migrate` applies any file not yet recorded in `public.schema_migrations`, in filename order. |
 | `seed.sql` | Fresh-sandbox seed (`rpt seed`): the `rausch-pt` practice, settings, default cadence. Local test DBs only. |
 | `dev/reset_test_lead_by_name.sql` | Used by `rpt test-lead` to replace a synthetic test lead; can only match `is_test` synthetic leads. |
 | `prod/2026-10-20_reset_before_handover.sql` | Handover reset after our final tests: removes every lead and everything linked to it, blocked numbers and logs; keeps settings (hours, holidays), cadence and templates. Guarded: stops if more than 4 leads exist. Owner's go only. |
@@ -26,6 +26,9 @@ client). Production: the client's project `taimrfktweamsnbbatux` (Singapore, ap-
 - `lead_action_requests` — idempotency for Sheet commands. `sheet_row_state` — profile fingerprint per linked
   Sheet lead. Trigger `leads_sheet_stage_change` (045) queues a Sheet update whenever a Sheet lead's status /
   cadence_state / needs_review changes.
+- `lead_reviews` (048) — one row per review flag (code, message, details, source) and its resolution
+  (who, choice, note). `leads.sms_disabled` = calls only; `leads.sheet_name_accepted` = Sheet name staff kept;
+  `sheet_row_state.sheet_name` = the Name the Sheet worker last read (fills pre-048 name reviews).
 - `dashboard_audit_log`, `dashboard_sms_requests` — staff actions. `test_usage_ledger` — provider cost for
   test runs. `service_heartbeats` — sheet-worker liveness.
 - `case_types` — case names + aliases ("Ortho" = "Physical Therapy"), used by the "Already booked" rule.
@@ -43,4 +46,4 @@ client). Production: the client's project `taimrfktweamsnbbatux` (Singapore, ap-
   both databases keep one schema.
 - Write migrations to be re-runnable (`if not exists`, `drop constraint if exists`, guarded updates).
 - Some invariants are enforced by triggers/constraints (migration 025's worker claim protocol, 028–030
-  review-pause fallback); read the migration before changing related Python.
+  review-pause fallback, 048 review rows and close-on-clear); read the migration before changing related Python.

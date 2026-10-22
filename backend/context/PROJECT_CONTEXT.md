@@ -65,7 +65,7 @@ api (except `/api/v1/dashboard/*`, which is internal only), everything else to t
 
 ## 5. Database
 
-Schema identical to demo (migrations 001–045). Unused Stride/Keap/booking tables stay empty. Production was
+Schema identical to demo (migrations 001–045 and 048; demo also has 046–047). Unused Stride/Keap/booking tables stay empty. Production was
 filled with a demo copy on 2026-10-10; `supabase/prod/2026-10-16_clear_demo_copy.sql` clears it before
 go-live (owner's go-ahead required).
 
@@ -160,3 +160,48 @@ here (the schema already matches).
   closed; last new contact 15 min before closing (6:45 PM / 1:15 PM); limits unchanged; 8 holidays (dates
   to the end of 2028). Applied with `supabase/prod/2026-10-19_clinic_hours_holidays.sql`. The worker's
   claim now also skips holidays (before, only planning did, so a held-back step could go out on one).
+
+### 2026-10-22 — Clear review reasons, resolve with a choice (migration 048)
+
+Incident 2026-10-21: one lead was flagged because its Name cell was edited, another because its Day 0 text
+failed with Twilio 30006 (landline). Staff pressed Resume: the steps came back but `needs_review` stayed, so
+the worker sent nothing while the page said "Pause cadence". Nothing recorded what changed or who decided.
+
+- `lead_reviews` (migration 048): one row per flag (reason code, plain message, details such as old/new
+  name or the Twilio code, source, time) and its resolution (who, choice, note, time). Every flag path
+  passes a code (`review.flag_lead_for_review` / `record_review`); the 030 fail-safe (replaced in 048) writes
+  a row too; a deferred trigger gives any other flag a row from its `review_reason`; clearing
+  `needs_review` closes open rows (booked, DNC, restart, unblock…). Existing flagged leads were backfilled.
+- Groups and choices (`services/lead_review.py`): name (use new name / keep old name / different person),
+  text (calls only / try texting again, hidden for landline-type codes / front desk), call (number is
+  right / wrong number / front desk), not confirmed + other (continue / front desk), number blocked (front
+  desk; unblock stays on the lead page). Any staff member or admin may resolve.
+- Continue choices fully resume: review closed, status `in_progress`, cadence `active`, the
+  `paused_for_review` steps restored and shifted by the time in review (at least enough that the earliest
+  step lands now, so one step goes out promptly and the rest keep their spacing; the worker still applies
+  calling hours). Front desk: `closed_no_response` + `terminated`, reason "Handled by front desk". Wrong
+  number / different person / phone changed: `invalid_phone` + `terminated` = closed for good (Resume, the
+  board's In cadence/New and Sheet Restart all refuse).
+- A phone number changed in the Sheet is no longer a review: the old lead closes at once; staff add a row.
+- Calls only: `leads.sms_disabled` (not `sms_opt_out`, which means the patient sent STOP, is inherited by a
+  new referral on the number and is cleared by an unblock). CLAIM_SQL never texts it, booking-link texts
+  are cancelled, a restart plans its texts as skipped. Not inherited by a new lead on the number.
+- `leads.sheet_name_accepted`: "keep old name" remembers the Sheet value so profile sync never re-flags it.
+- Resume and the board's In cadence refuse a flagged lead (409, plain message); board New/Closed/Booked on
+  a flagged lead record the resolution with the staff name. `GET /review/{id}` returns the card and, per
+  choice, the effect and next step for the confirm pop-up; `POST /review/{id}/resolve` takes `choice` + `note`.
+- Sheet: Outcome Status texts only (docs/GOOGLE_SHEET.md); Message Outcome `Calls only (texts off)`.
+- Twilio's own error code (e.g. 21614) now travels in a refused-send error, so the card can say "landline".
+- QA fixes (same day): reviews on one lead are settled one at a time, oldest first (a choice applies its
+  effect, e.g. texts off, and the lead stays paused until the last review), so "use new name" can no longer
+  turn texts back on for a landline. A phone change blocks restart/resume/New/unblock-continue on the old
+  number whatever the status (a Booked lead stays Booked). Pre-048 name reviews show the name on file, do
+  not offer "use new name", and "keep old name" accepts whatever the Sheet row holds at the next profile
+  sync. Review texts in the Sheet never overwrite a command staff typed and the worker has not run yet.
+  Resume refuses a closed lead (front desk, finished). Legacy wrong-person cards show the agent's note.
+- QA round 2: no "accept the next Sheet name" marker. sheet_row_state.sheet_name keeps the Name the
+  Sheet worker last read; a pre-048 name review gets old -> new filled from it on the next read (nothing
+  resolved or flagged), and "keep old name" before that accepts only that recorded name (refused if none
+  is recorded). Any phone_changed record blocks restart/resume on the old number, however it was settled.
+  "Try texting again" chosen while another review is open is planned when the lead finally resumes.
+  Pause is refused on a closed lead like Resume.

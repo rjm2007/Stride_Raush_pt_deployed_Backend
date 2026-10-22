@@ -13,6 +13,9 @@ import type { StaffUser } from './session';
 import { dashboardFetch, DashboardHttpError } from './dashboard-client';
 import { queryCache } from './query-cache';
 import { cachedFetchers, cacheKeys, cancelLeadPrefetch, prefetchLeadOnHover, useCached } from './use-cached';
+import { ResolveDialog, ReviewCard } from './review-panel';
+import { filterReviews, groupCounts, REVIEW_GROUPS, reviewOf, stageAfter } from './review';
+import type { ReviewChoice, ReviewGroup } from './dashboard-data';
 
 const statusMeta: Record<LeadStage, { label: string }> = {
   new: { label: 'New' },
@@ -226,11 +229,12 @@ export function DashboardShell({ user, staff, children }: { user: StaffUser; sta
     if (queryCache.get<Snapshot>(cacheKeys.snapshot)?.data) snapshotQuery.mutate((current) => change(current!));
   }
 
-  function resolveLeadReview(id: string) {
+  function resolveLeadReview(id: string, choice: ReviewChoice) {
+    const stage = stageAfter(choice);
     updateSnapshot((current) => ({
       ...current,
-      leads: current.leads.map((lead) => lead.id === id ? { ...lead, stage: 'cadence', needs_review: false, review_reason: null, next_step: 'Resume cadence' } : lead),
-      counts: { ...current.counts, attention: Math.max(0, current.counts.attention - 1), cadence: current.counts.cadence + 1 },
+      leads: current.leads.map((lead) => lead.id === id ? { ...lead, stage, needs_review: false, review_reason: null, review: null } : lead),
+      counts: { ...current.counts, attention: Math.max(0, current.counts.attention - 1), [stage]: current.counts[stage] + 1 },
       system: { ...current.system, review_queue: Math.max(0, (current.system.review_queue ?? 1) - 1) },
     }));
   }
@@ -314,7 +318,7 @@ export function DashboardShell({ user, staff, children }: { user: StaffUser; sta
   );
 }
 
-function renderPage(path: string, view: string | null, query: string | null, stage: string | null, chatId: string | null, snapshot: Snapshot, loading: boolean, detail: LeadDetail | null, router: ReturnType<typeof useRouter>, action: DashboardAction, onReviewResolved: (id: string) => void, onTemplatePublished: (id: string, body: string, name: string) => void, role: StaffUser['role'], staff: StaffMember[], userId: string) {
+function renderPage(path: string, view: string | null, query: string | null, stage: string | null, chatId: string | null, snapshot: Snapshot, loading: boolean, detail: LeadDetail | null, router: ReturnType<typeof useRouter>, action: DashboardAction, onReviewResolved: (id: string, choice: ReviewChoice) => void, onTemplatePublished: (id: string, body: string, name: string) => void, role: StaffUser['role'], staff: StaffMember[], userId: string) {
   const requestedLeadId = path.match(/^\/leads\/([0-9a-f-]+)/i)?.[1];
   // Narrowed to a non-null LeadDetail so the lead routes below typecheck; the
   // runtime behaviour is unchanged.
@@ -435,6 +439,9 @@ function LeadsPage({ snapshot, staff, mode, initialQuery, initialStage, router, 
     if (!id || moving) return;
     const lead = snapshot.leads.find((item) => item.id === id);
     if (!lead || lead.stage === stage) return;
+    // A flagged lead goes back into outreach only through a review choice (the backend refuses the
+    // move too): open the lead, where Resolve review shows the reason and the choices.
+    if (stage === 'cadence' && lead.needs_review) { router.push(`/leads/${id}`); return; }
     // Restarting contacts a real patient from day zero, so it is confirmed first.
     // A booked lead is restartable (a mis-clicked Booked needs an undo), so the
     // popup names the booking; moving it back to Booked undoes a mis-click here.
@@ -459,26 +466,25 @@ The remaining schedule is discarded and a new cadence begins from today. They wi
       <Panel><DataTable heads={['Lead', 'Status', 'Owner', 'Source', 'Next step', 'Last contact', '']} >{leads.map((lead) => <tr key={lead.id} className={`row-${lead.stage} ${lead.number_block ? 'row-blocked' : ''}`} onMouseEnter={() => prefetchLeadOnHover(lead.id)} onMouseLeave={cancelLeadPrefetch}><td><strong>{lead.full_name}</strong><small>{lead.display_id}</small></td><td><span className="card-tags"><StatusBadge stage={lead.stage} paused={lead.cadence_state === 'paused'} />{lead.number_block && <BlockedTag />}</span></td><td>{lead.owner ?? 'Unassigned'}</td><td>{sourceLabel(lead.source)}</td><td>{lead.next_step ?? 'No planned action'}</td><td>{relative(lead.last_contacted_at)}</td><td><Link className="row-link" href={`/leads/${lead.id}`} aria-label={`Open ${lead.full_name}`}>→</Link></td></tr>)}</DataTable></Panel>}</>;
 }
 
-function ReviewPage({ snapshot, action, onResolved, loading }: { snapshot: Snapshot; action: DashboardAction; onResolved: (id: string) => void; loading: boolean }) {
-  const leads = snapshot.leads.filter((lead) => lead.stage === 'attention');
+function ReviewPage({ snapshot, action, onResolved, loading }: { snapshot: Snapshot; action: DashboardAction; onResolved: (id: string, choice: ReviewChoice) => void; loading: boolean }) {
+  const flagged = snapshot.leads.filter((lead) => lead.stage === 'attention');
+  const [group, setGroup] = useState<ReviewGroup | 'all'>('all');
+  const leads = filterReviews(flagged, group);
+  const counts = groupCounts(flagged);
   const [selectedId, setSelectedId] = useState(leads[0]?.id ?? '');
-  const [resolving, setResolving] = useState(false);
+  const [choosing, setChoosing] = useState<ReviewChoice | null>(null);
   const selected = leads.find((lead) => lead.id === selectedId) ?? leads[0];
+  const review = selected ? reviewOf(selected) : null;
   function reviewNext() {
     if (!leads.length) return;
     const index = Math.max(0, leads.findIndex((lead) => lead.id === selected?.id));
     setSelectedId(leads[(index + 1) % leads.length].id);
   }
-  async function resolveReview() {
-    if (!selected || resolving) return;
-    setResolving(true);
-    try {
-      if (await action(`review/${selected.id}/resolve`, 'POST', { resolution: 'Reviewed by dashboard operator' })) onResolved(selected.id);
-    } finally { setResolving(false); }
-  }
-  return <><PageTitle title="Review Queue" subtitle="Review uncertain outreach results before trying again." tools={<button className="primary" type="button" disabled={!leads.length} onClick={reviewNext}>Review next</button>} />
-    {loading && !snapshot.leads.length ? <Panel title="Loading review queue"><SkeletonRows rows={4} /></Panel> : !leads.length ? <Panel><Empty title="Review queue is clear" body="There are no unresolved outreach items for this location." /></Panel> : <div className="two-col review-layout"><Panel title={`${leads.length} ${leads.length === 1 ? 'item needs' : 'items need'} attention`}>{leads.map((lead) => <button type="button" className={`review-item ${selected?.id === lead.id ? 'selected' : ''}`} key={lead.id} onClick={() => setSelectedId(lead.id)}><StatusBadge stage="attention" /><strong>{lead.full_name}</strong><span>{operationalMessage(lead.review_reason)}</span><small>{relative(lead.last_contacted_at)}</small></button>)}</Panel>
-      <Panel title={selected?.full_name ?? 'Review details'}>{selected && <><dl className="detail-list"><div><dt>Reason</dt><dd>{operationalMessage(selected.review_reason)}</dd></div><div><dt>Current status</dt><dd><StatusBadge stage="attention" /></dd></div><div><dt>Safe next step</dt><dd>Review the lead details before trying again.</dd></div></dl><Alert tone="warning">Unconfirmed results require staff review before another attempt.</Alert><button className="primary full" type="button" disabled={resolving} onClick={resolveReview}>{resolving ? 'Resolving…' : 'Resolve review'}</button></>}</Panel></div>}</>;
+  const filter = <SelectMenu className="filter-control" ariaLabel="Filter reviews by reason" value={group} onChange={(value) => setGroup(value as ReviewGroup | 'all')} options={REVIEW_GROUPS.filter((item) => item.value === 'all' || counts[item.value]).map((item) => ({ value: item.value, label: `${item.label} (${counts[item.value] ?? 0})` }))} />;
+  return <><PageTitle title="Review Queue" subtitle="Each lead here is paused. Read why, then choose what happens next." tools={<>{filter}<button className="primary" type="button" disabled={!leads.length} onClick={reviewNext}>Review next</button></>} />
+    {loading && !snapshot.leads.length ? <Panel title="Loading review queue"><SkeletonRows rows={4} /></Panel> : !leads.length ? <Panel><Empty title="Review queue is clear" body={group === 'all' ? 'There are no unresolved outreach items for this location.' : 'No leads need review for this reason.'} /></Panel> : <div className="two-col review-layout"><Panel title={`${leads.length} ${leads.length === 1 ? 'item needs' : 'items need'} attention`}>{leads.map((lead) => { const item = reviewOf(lead); return <button type="button" className={`review-item ${selected?.id === lead.id ? 'selected' : ''}`} key={lead.id} onClick={() => setSelectedId(lead.id)}><StatusBadge stage="attention" /><strong>{lead.full_name}</strong><span>{item ? (item.group_label === item.title ? item.title : `${item.group_label}: ${item.title}`) : operationalMessage(lead.review_reason)}</span><small>{item?.flagged_at ? relative(item.flagged_at) : relative(lead.last_contacted_at)}</small></button>; })}</Panel>
+      <Panel title={selected?.full_name ?? 'Review details'}>{selected && review && <><ReviewCard review={review} onChoose={setChoosing} /><p className="muted"><Link className="text-action" href={`/leads/${selected.id}`}>Open the lead →</Link></p></>}</Panel></div>}
+    {selected && choosing && <ResolveDialog leadId={selected.id} choice={choosing} action={action} onClose={() => setChoosing(null)} onResolved={(choice) => { if (!review?.also?.length) onResolved(selected.id, choice); }} />}</>;
 }
 
 function leadMovementSeries(snapshot: Snapshot) {
@@ -855,6 +861,12 @@ function LeadFrame({ detail, tab, action, role, children }: { detail: LeadDetail
   const [busy,setBusy] = useState(false);
   const cadencePaused = lead.cadence_state === 'paused';
   const cadenceOver = stage === 'closed' || stage === 'booked';
+  // 2026-10-21: Resume on a flagged lead left the review open, so nothing went out. While a review is
+  // open the only way forward is a choice (the backend refuses Resume too).
+  const review = reviewOf({ needs_review: Boolean(lead.needs_review), review_reason: (lead.review_reason as string | null) ?? null, review: (lead.review ?? null) as Lead['review'] });
+  const [reviewOpen, setReviewOpen] = useState(false);
+  const [choosing, setChoosing] = useState<ReviewChoice | null>(null);
+  const textsOff = Boolean(lead.texts_off);
   async function toggleCadence(){ setBusy(true); try { await action(`leads/${id}/cadence`,'POST',{action: cadencePaused ? 'resume':'pause'}); } finally {setBusy(false);} }
   const router = useRouter();
   const [deleting,setDeleting] = useState(false);
@@ -868,7 +880,7 @@ This removes the lead and everything attached to it - cadence schedule, calls, t
     if (await action(`leads/${id}`,'DELETE')) router.push('/leads');
     else setDeleting(false);
   }
-  return <><div className="breadcrumbs"><Link href="/leads">Lead Pipeline</Link><span>/</span><span>{String(lead.display_id)}</span><span>/</span><strong>{lead.full_name}</strong></div><section className="lead-header"><div className="lead-avatar">{initials(lead.full_name)}</div><div className="lead-identity"><h1>{lead.full_name}</h1><span><PhoneIcon />{phone}</span></div><StatusBadge stage={stage} paused={cadencePaused} />{numberBlock && <BlockedTag />}{total > 0 && !cadenceOver && <span className="version">{String(lead.cadence_version_name ?? detail.cadence_version?.name ?? 'Cadence')} · {progress} of {total}</span>}<span className="location"><MapPinIcon />{String(lead.location ?? 'Not assigned')}</span><div className="record-actions">{!cadenceOver && <button className="secondary icon-label" type="button" disabled={busy} onClick={toggleCadence} title={cadencePaused ? 'Resume cadence' : 'Pause cadence'}>{cadencePaused ? <PlayIcon /> : <PauseIcon />}{cadencePaused ? 'Resume cadence':'Pause cadence'}</button>}<Link className="primary icon-label" href={`/leads/${id}/conversations/sms`}><EnvelopeIcon />Send SMS</Link>{role === 'super_admin' && <button className="danger-button icon-label" type="button" disabled={busy || deleting} onClick={removeLead} title="Delete lead" aria-label="Delete lead"><TrashIcon />{deleting ? 'Deleting…' : 'Delete lead'}</button>}</div></section><nav className="record-tabs">{[['overview','Overview',`/leads/${id}`],['conversations','Conversations',`/leads/${id}/conversations/sms`],['cadence','Cadence',`/leads/${id}/cadence`],['activity','Activity',`/leads/${id}/activity`]].map(([key,label,href])=><Link className={tab===key?'active':''} aria-current={tab === key ? 'page' : undefined} href={href} key={key}>{label}</Link>)}</nav>{numberBlock && <Alert tone="danger"><strong>This number is blocked.</strong> No calls or texts will go out to it. {numberBlockMessage(numberBlock)}{role === 'super_admin' && <> <button className="link-button" type="button" onClick={() => setUnblocking(true)}>Unblock number</button></>}</Alert>}{stage === 'attention' && Boolean(lead.review_reason) && <Alert tone="warning"><strong>Needs attention:</strong> {operationalMessage(lead.review_reason)}</Alert>}{children}{unblocking && <UnblockDialog detail={detail} action={action} onClose={() => setUnblocking(false)} />}</>;
+  return <><div className="breadcrumbs"><Link href="/leads">Lead Pipeline</Link><span>/</span><span>{String(lead.display_id)}</span><span>/</span><strong>{lead.full_name}</strong></div><section className="lead-header"><div className="lead-avatar">{initials(lead.full_name)}</div><div className="lead-identity"><h1>{lead.full_name}</h1><span><PhoneIcon />{phone}</span></div><StatusBadge stage={stage} paused={cadencePaused} />{numberBlock && <BlockedTag />}{total > 0 && !cadenceOver && <span className="version">{String(lead.cadence_version_name ?? detail.cadence_version?.name ?? 'Cadence')} · {progress} of {total}</span>}<span className="location"><MapPinIcon />{String(lead.location ?? 'Not assigned')}</span>{textsOff && <span className="status-pill texts-off" title={String(lead.sms_disabled_reason ?? '')}>Calls only (texts off)</span>}<div className="record-actions">{review ? <button className="primary icon-label" type="button" onClick={() => setReviewOpen(true)}>Resolve review</button> : !cadenceOver && <button className="secondary icon-label" type="button" disabled={busy} onClick={toggleCadence} title={cadencePaused ? 'Resume cadence' : 'Pause cadence'}>{cadencePaused ? <PlayIcon /> : <PauseIcon />}{cadencePaused ? 'Resume cadence':'Pause cadence'}</button>}<Link className="primary icon-label" href={`/leads/${id}/conversations/sms`}><EnvelopeIcon />Send SMS</Link>{role === 'super_admin' && <button className="danger-button icon-label" type="button" disabled={busy || deleting} onClick={removeLead} title="Delete lead" aria-label="Delete lead"><TrashIcon />{deleting ? 'Deleting…' : 'Delete lead'}</button>}</div></section><nav className="record-tabs">{[['overview','Overview',`/leads/${id}`],['conversations','Conversations',`/leads/${id}/conversations/sms`],['cadence','Cadence',`/leads/${id}/cadence`],['activity','Activity',`/leads/${id}/activity`]].map(([key,label,href])=><Link className={tab===key?'active':''} aria-current={tab === key ? 'page' : undefined} href={href} key={key}>{label}</Link>)}</nav>{numberBlock && <Alert tone="danger"><strong>This number is blocked.</strong> No calls or texts will go out to it. {numberBlockMessage(numberBlock)}{role === 'super_admin' && <> <button className="link-button" type="button" onClick={() => setUnblocking(true)}>Unblock number</button></>}</Alert>}{review && <Alert tone="warning"><strong>Needs review: {review.title}.</strong> {review.reason} <button className="link-button" type="button" onClick={() => setReviewOpen(true)}>Resolve review</button></Alert>}{children}{unblocking && <UnblockDialog detail={detail} action={action} onClose={() => setUnblocking(false)} />}{review && reviewOpen && !choosing && <ModalShell className="review-dialog" labelId="review-title" onClose={() => setReviewOpen(false)}><header><div><h2 id="review-title">Resolve review</h2><p>{lead.full_name}: choose what happens next.</p></div><button className="close-button" type="button" onClick={() => setReviewOpen(false)} aria-label="Close review">×</button></header><div className="review-dialog-body"><ReviewCard review={review} onChoose={setChoosing} /></div></ModalShell>}{choosing && <ResolveDialog leadId={id} choice={choosing} action={action} onClose={() => { setChoosing(null); setReviewOpen(false); }} />}</>;
 }
 
 function LeadOverview({ detail }: { detail: LeadDetail }) {
@@ -888,9 +900,9 @@ function LeadOverview({ detail }: { detail: LeadDetail }) {
   const nextCopy = stage === 'booked' ? 'Staff marked this lead Booked, so outreach has stopped. Calls and texts resume only if staff restart the cadence.'
     : cadenceOver ? 'Automated outreach has ended for this lead.'
     : pendingResult ? 'An outreach step is waiting for confirmation.'
-    : paused ? (needsReview ? 'No calls or texts go out until someone reviews this lead. Fix the issue below, then resume the cadence.' : 'No calls or texts go out until the cadence is resumed.')
+    : paused ? (needsReview ? 'No calls or texts go out until someone resolves the review. Use Resolve review at the top and pick what happens next.' : 'No calls or texts go out until the cadence is resumed.')
     : lead.next_event_id ? 'Continue the scheduled outreach cadence.' : 'No planned outreach event remains.';
-  return <div className="stack"><Panel title="Lead information"><dl className="info-grid"><div><dt>Lead ID</dt><dd>{String(lead.display_id)}</dd></div><div><dt>Source</dt><dd>{sourceLabel(lead.source ?? lead.source_system)}</dd></div><div><dt>Owner</dt><dd>{String(lead.owner ?? 'Unassigned')}</dd></div><div><dt>Created</dt><dd>{date(String(lead.created_at ?? ''))}</dd></div>{Boolean(lead.date_of_birth) && <div><dt>Date of birth</dt><dd>{String(lead.date_of_birth)}</dd></div>}{Boolean(lead.referred_by) && <div><dt>Referred by</dt><dd>{String(lead.referred_by)}</dd></div>}{Boolean(lead.lead_type) && <div><dt>Lead type</dt><dd>{String(lead.lead_type)}</dd></div>}<div><dt>Preferred location</dt><dd>{String(lead.location ?? 'Not assigned')}</dd></div><div><dt>Time zone</dt><dd>{timezoneLabel(lead.timezone)}</dd></div></dl></Panel><Panel title={cadenceOver ? "Outcome" : "Next action"}><div className="next-action"><span className="status-icon"><PhoneIcon size={20} /></span><div><strong>{nextAction}</strong><p>{nextCopy}</p></div><Link className="secondary" href={`/leads/${lead.id}/cadence`}>View schedule</Link></div></Panel><Panel title="Notes">{stage === 'attention' && Boolean(lead.review_reason) ? <p><strong>Why this lead needs attention:</strong> {operationalMessage(lead.review_reason)}</p> : <p className="muted">No additional lead notes have been recorded.</p>}</Panel></div>;
+  return <div className="stack"><Panel title="Lead information"><dl className="info-grid"><div><dt>Lead ID</dt><dd>{String(lead.display_id)}</dd></div><div><dt>Source</dt><dd>{sourceLabel(lead.source ?? lead.source_system)}</dd></div><div><dt>Owner</dt><dd>{String(lead.owner ?? 'Unassigned')}</dd></div><div><dt>Created</dt><dd>{date(String(lead.created_at ?? ''))}</dd></div>{Boolean(lead.date_of_birth) && <div><dt>Date of birth</dt><dd>{String(lead.date_of_birth)}</dd></div>}{Boolean(lead.referred_by) && <div><dt>Referred by</dt><dd>{String(lead.referred_by)}</dd></div>}{Boolean(lead.lead_type) && <div><dt>Lead type</dt><dd>{String(lead.lead_type)}</dd></div>}<div><dt>Preferred location</dt><dd>{String(lead.location ?? 'Not assigned')}</dd></div><div><dt>Time zone</dt><dd>{timezoneLabel(lead.timezone)}</dd></div></dl></Panel><Panel title={cadenceOver ? "Outcome" : "Next action"}><div className="next-action"><span className="status-icon"><PhoneIcon size={20} /></span><div><strong>{nextAction}</strong><p>{nextCopy}</p></div><Link className="secondary" href={`/leads/${lead.id}/cadence`}>View schedule</Link></div></Panel><Panel title="Notes">{lead.review ? <p><strong>Why this lead needs attention:</strong> {String((lead.review as { reason?: string }).reason ?? '')}</p> : stage === 'attention' && Boolean(lead.review_reason) ? <p><strong>Why this lead needs attention:</strong> {operationalMessage(lead.review_reason)}</p> : <p className="muted">No additional lead notes have been recorded.</p>}{Boolean(lead.texts_off) && <p><strong>Calls only (texts off):</strong> staff turned texts off for this lead{lead.sms_disabled_reason ? ` (${String(lead.sms_disabled_reason)})` : ''}.</p>}</Panel></div>;
 }
 
 
@@ -1186,7 +1198,7 @@ function LeadActivityPage({ detail }: { detail: LeadDetail }) {
 function ConversationTabs({ id, active }: { id:string; active:'sms'|'calls' }) { return <nav className="conversation-tabs" aria-label="Conversations"><Link className={active==='sms'?'active':''} aria-current={active === 'sms' ? 'page' : undefined} href={`/leads/${id}/conversations/sms`}><MessageIcon />SMS</Link><Link className={active==='calls'?'active':''} aria-current={active === 'calls' ? 'page' : undefined} href={`/leads/${id}/conversations/calls`}><PhoneIcon />Call transcripts</Link></nav>; }
 // A flagged lead shows why it was flagged: its next step is on hold until staff
 // act, so the reason is what the card has to say.
-function LeadCard({ lead, onOpen, onHover, dragging = false, onDragStart, onDragEnd }: { lead: Lead; onOpen:()=>void; onHover?: ()=>void; dragging?: boolean; onDragStart?: ()=>void; onDragEnd?: ()=>void }) { const meta=statusMeta[lead.stage]; return <button className={`lead-card ${dragging ? 'is-dragging' : ''} ${lead.number_block ? 'is-blocked' : ''}`} type="button" draggable onMouseEnter={onHover} onMouseLeave={cancelLeadPrefetch} onDragStart={(event) => { setLeadDragData(event, lead.id); onDragStart?.(); }} onDragEnd={onDragEnd} onClick={onOpen}><strong>{lead.full_name}</strong><span className="location"><MapPinIcon />{lead.location ?? 'Not assigned'}</span><span className="card-tags"><StatusBadge stage={lead.stage} paused={lead.cadence_state === 'paused'} />{lead.number_block && <BlockedTag />}</span>{lead.stage==='cadence'&&lead.cadence_state!=='paused'&&<span className="version">{lead.cadence_version_name ?? 'Cadence'} · {lead.cadence_progress ?? 0} of {lead.cadence_total ?? 0}</span>}{lead.stage === 'attention' && lead.review_reason ? <span className="next attention-reason">Reason: {operationalMessage(lead.review_reason)}</span> : <span className="next">{lead.stage === 'closed' || lead.stage === 'booked' ? 'Outcome' : 'Next'}: {lead.next_step ?? 'No planned action'}</span>}<span className="sr-only">{meta.label}</span></button>; }
+function LeadCard({ lead, onOpen, onHover, dragging = false, onDragStart, onDragEnd }: { lead: Lead; onOpen:()=>void; onHover?: ()=>void; dragging?: boolean; onDragStart?: ()=>void; onDragEnd?: ()=>void }) { const meta=statusMeta[lead.stage]; return <button className={`lead-card ${dragging ? 'is-dragging' : ''} ${lead.number_block ? 'is-blocked' : ''}`} type="button" draggable onMouseEnter={onHover} onMouseLeave={cancelLeadPrefetch} onDragStart={(event) => { setLeadDragData(event, lead.id); onDragStart?.(); }} onDragEnd={onDragEnd} onClick={onOpen}><strong>{lead.full_name}</strong><span className="location"><MapPinIcon />{lead.location ?? 'Not assigned'}</span><span className="card-tags"><StatusBadge stage={lead.stage} paused={lead.cadence_state === 'paused'} />{lead.number_block && <BlockedTag />}</span>{lead.stage==='cadence'&&lead.cadence_state!=='paused'&&<span className="version">{lead.cadence_version_name ?? 'Cadence'} · {lead.cadence_progress ?? 0} of {lead.cadence_total ?? 0}</span>}{lead.stage === 'attention' && (lead.review || lead.review_reason) ? <span className="next attention-reason">Reason: {lead.review ? lead.review.title : operationalMessage(lead.review_reason)}</span> : <span className="next">{lead.stage === 'closed' || lead.stage === 'booked' ? 'Outcome' : 'Next'}: {lead.next_step ?? 'No planned action'}</span>}<span className="sr-only">{meta.label}</span></button>; }
 function StatusTiles({ counts, loading = false }: { counts: Record<LeadStage,number>; loading?: boolean }) { return <section className="status-tiles" aria-busy={loading}>{(['new','cadence','attention','booked','closed'] as LeadStage[]).map((stage)=><Link className={stage} href={`/leads?stage=${stage}`} key={stage}>{stage !== 'new' && <StatusGlyph stage={stage} size="large" />}<div><small>{statusMeta[stage].label}</small><strong>{loading ? "—" : counts[stage]}</strong></div></Link>)}</section>; }
 // Blocked leads stay in Closed (nothing for staff to fix), but read as blocked
 // at a glance rather than as one more closed lead.

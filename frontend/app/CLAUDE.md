@@ -18,6 +18,7 @@ on each call (401 → cache and chats cleared → `/login`). Keep it that way.
 | `use-cached.ts` | `useCached()` hook, `cacheKeys` / `cachedFetchers`, hover prefetch for lead records. |
 | `staff-session.ts` | Server-only: `React.cache()` around `getStaffUser()` so layout + page share one check per request. |
 | `display.ts` | Formatting: clinic timezone (America/Los_Angeles), enum labels, status tones, activity descriptions, operational error messages. |
+| `review.ts`, `review-panel.tsx` | Needs Review: group filter and wording (tested in `review.test.ts`); `ReviewCard` (reason, proof, choices) and `ResolveDialog` (confirm pop-up from `GET review/{id}`, optional note). A flagged lead shows Resolve review instead of Resume. |
 | `cadence.ts` | Cadence helpers: split events into runs, step names, run summaries, call naming, step reordering. |
 | `assistant.tsx` | Staff assistant UI (dock + full page), up to 3 leads per chat, streaming answers. History via `assistant-store.ts`. |
 | `assistant-store.ts` | Chat history: this tab's `sessionStorage`, tagged with the staff member, cleared on sign-out and 401; deletes the old `localStorage` copy. Tested in `assistant-store.test.ts`. |

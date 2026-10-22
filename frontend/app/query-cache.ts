@@ -39,7 +39,9 @@ export function mutationTargets(path: string, method: string): { keys: string[];
     return { keys: [snapshot, detail, blocked], prefixes: [], drop: [] };
   }
   const review = relative.match(/^review\/([0-9a-f-]+)\/resolve$/i);
-  if (review) return { keys: [snapshot, key(`leads/${review[1]}`)], prefixes: [], drop: [] };
+  // A choice can close the lead, resume it or turn texts off: the board, the lead and (to be safe) the
+  // blocked-number list all refetch.
+  if (review) return { keys: [snapshot, key(`leads/${review[1]}`), blocked], prefixes: [], drop: [] };
   // Unblocking by number can touch every lead on that number.
   if (/^blocked-numbers/i.test(relative)) return { keys: [snapshot, blocked], prefixes: [key('leads/')], drop: [] };
   // The snapshot carries the active cadence and the templates, so both studios refresh it too.
