@@ -6,7 +6,7 @@ import { ModalShell } from './dashboard-controls';
 import { dashboardGet } from './dashboard-client';
 import type { Review, ReviewChoice, ReviewPreview } from './dashboard-data';
 import { CLINIC_TZ, CLINIC_TZ_LABEL } from './display';
-import { RESOLVED_MESSAGE } from './review';
+import { closedReviewMessage, RESOLVED_MESSAGE } from './review';
 
 type ResolveAction = (path: string, method: string, body?: unknown, successMessage?: string) => Promise<Record<string, unknown> | null>;
 
@@ -50,6 +50,10 @@ export function ResolveDialog({ leadId, choice, action, onClose, onResolved }: {
     return () => { live = false; };
   }, [leadId]);
   const option = preview?.options.find((item) => item.choice === choice);
+  // The review closed after this page loaded: say why, and reload the page on close so the stale
+  // Resolve review button and Paused badge go away.
+  const closedMessage = closedReviewMessage(preview);
+  const close = closedMessage ? () => window.location.reload() : onClose;
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
@@ -59,12 +63,17 @@ export function ResolveDialog({ leadId, choice, action, onClose, onResolved }: {
     setSaving(false);
     if (result) { onResolved?.(choice); onClose(); }
   }
+  if (closedMessage) return <ModalShell className="resolve-dialog" labelId="resolve-title" onClose={close}>
+    <header><div><h2 id="resolve-title">Review already closed</h2><p>{preview?.full_name}</p></div><button className="close-button" type="button" onClick={close} aria-label="Close">×</button></header>
+    <div className="review-dialog-body"><p className="field-error" role="alert">{closedMessage}</p>
+      <footer><button className="primary" type="button" onClick={close}>Refresh page</button></footer></div>
+  </ModalShell>;
   return <ModalShell className="resolve-dialog" labelId="resolve-title" onClose={onClose}>
     <header><div><h2 id="resolve-title">{option?.label ?? 'Resolve review'}</h2><p>{preview ? preview.full_name : 'Loading…'}</p></div><button className="close-button" type="button" onClick={onClose} aria-label="Close">×</button></header>
     <form onSubmit={submit}>
       {failed ? <p className="field-error" role="alert">The review could not be loaded. Close this and try again.</p>
         : !preview ? <p className="muted">Checking what this will do…</p>
-        : !option ? <p className="field-error" role="alert">This choice is no longer available. The review may already be resolved.</p>
+        : !option ? <p className="field-error" role="alert">This choice is no longer available for this review. Close this and pick again.</p>
         : <div className="resolve-summary"><p><strong>{option.effect}.</strong></p><p>{option.next_step}</p></div>}
       <label className="field-label">Note (optional)<textarea value={note} maxLength={500} onChange={(event) => setNote(event.target.value)} placeholder="e.g. Called the patient, the number is a landline" /></label>
       <footer><button className="secondary" type="button" onClick={onClose} disabled={saving}>Cancel</button><button className="primary" type="submit" disabled={saving || !option}>{saving ? 'Saving…' : 'Confirm'}</button></footer>

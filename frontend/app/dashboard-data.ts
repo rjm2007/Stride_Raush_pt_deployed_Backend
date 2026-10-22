@@ -67,6 +67,8 @@ export type ReviewPreview = {
   full_name: string;
   review: Review | null;
   options: Array<{ choice: ReviewChoice; label: string; effect: string; next_step: string; confirm: string }>;
+  // Set when the lead has no open review any more: why (newer Sheet row on the number, resolved by someone, closed).
+  closed?: { reason: 'replaced' | 'resolved' | 'closed'; message: string } | null;
 };
 
 // Set when the lead's phone is on the do-not-contact list. Calls and texts to

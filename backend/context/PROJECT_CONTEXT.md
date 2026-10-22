@@ -220,3 +220,10 @@ the worker sent nothing while the page said "Pause cadence". Nothing recorded wh
   "Number blocked; needs review", turns it into "Start cadence"), so a Restart there was typed by staff.
 - `apply_snapshot` decides on the row before it writes: Action is never written over a command staff typed
   that has not run, nor over a waiting Restart. Tests: `test_sheet_direct.py`, `test_lead_review_integration.py`.
+
+### 2026-10-23 — Resolve pop-up says why a review is already closed (port of demo ca47b79 + c1b6acb)
+- A lead page opened before its review closed (e.g. a newer Sheet row on the same phone replaced the lead)
+  still showed Resolve review, and Confirm only said "no longer available".
+- `lead_review.closed_review()` / `resolution_label()`; `OUTCOME_LABELS` moved out of `routes/dashboard.py`.
+  `GET /dashboard/review/{id}` keeps `review: null, options: []` and adds `closed: {reason, message}`; the
+  resolve 409 detail carries the same message. Dashboard: "Review already closed" + Refresh page.

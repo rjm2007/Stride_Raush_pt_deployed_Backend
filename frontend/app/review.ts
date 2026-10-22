@@ -4,7 +4,7 @@
 // worker sent nothing, and the page still read "Pause cadence". Staff could not see WHAT had changed.
 // Each flagged lead now carries a `review` from the backend (reason, proof, choices); a choice is the
 // only way to put a flagged lead back into outreach.
-import type { Lead, Review, ReviewChoice, ReviewGroup } from './dashboard-data';
+import type { Lead, Review, ReviewChoice, ReviewGroup, ReviewPreview } from './dashboard-data';
 
 export const REVIEW_GROUPS: Array<{ value: ReviewGroup | 'all'; label: string }> = [
   { value: 'all', label: 'All reasons' },
@@ -61,3 +61,13 @@ export const RESOLVED_MESSAGE: Record<ReviewChoice, string> = {
   close_phone_changed: 'Lead closed. Add the new number as a new row in the Sheet.',
   front_desk: 'Lead closed: handled by front desk.',
 };
+
+export const CLOSED_REVIEW_FALLBACK = 'This review is already closed.';
+
+// 2026-10-23: a lead page opened before its review closed (a newer Sheet row on the same number
+// replaced the lead) still showed Resolve review, and Confirm only said "no longer available".
+// The pop-up now says why, from the backend; null while the review is still open.
+export function closedReviewMessage(preview: Pick<ReviewPreview, 'review' | 'closed'> | null): string | null {
+  if (!preview || preview.review) return null;
+  return preview.closed?.message || CLOSED_REVIEW_FALLBACK;
+}
