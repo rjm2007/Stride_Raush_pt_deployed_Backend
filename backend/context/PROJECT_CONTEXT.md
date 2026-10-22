@@ -227,3 +227,15 @@ the worker sent nothing while the page said "Pause cadence". Nothing recorded wh
 - `lead_review.closed_review()` / `resolution_label()`; `OUTCOME_LABELS` moved out of `routes/dashboard.py`.
   `GET /dashboard/review/{id}` keeps `review: null, options: []` and adds `closed: {reason, message}`; the
   resolve 409 detail carries the same message. Dashboard: "Review already closed" + Refresh page.
+
+### 2026-10-23 — Sheet: "keep old name" writes the old name back into the row (port of demo 3722cc5)
+- Demo test: after "Same person, keep old name & continue" calls resumed under the old name, but the row's Name
+  still showed the new one.
+- `resolve_review` (choice `keep_old_name` with a recorded new name) queues a second Sheet update, reason
+  `name_kept`; `build_sheet_snapshot` adds `name` (on file) and `name_replaces` (reviewed new name).
+  `apply_snapshot` writes the Name cell only while it still shows `name_replaces`; a third name is left alone.
+- The cell is re-checked just before the write (`SheetGrid.set(expect=...)`, `FlushResult.skipped_rows`).
+  After the write the stored fingerprint follows (`_save_renamed`, only if the row was otherwise in sync) and
+  `leads.sheet_name_accepted` is cleared, so the same new name typed again opens a new review.
+- A pre-048 name review takes its new name from the Name the Sheet worker last read (`_legacy_sheet_name`), so
+  "keep old name" on it also writes the name on file back (`test_legacy_name_review_keep_old_name_...`).

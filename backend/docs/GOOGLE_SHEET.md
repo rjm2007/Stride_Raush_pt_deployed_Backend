@@ -82,8 +82,9 @@ minutes. Email, Date Of Birth, Location and Case are applied. Name and phone are
   `Start cadence`). Add the new number as a **new row**. The dashboard keeps the reason ("Phone number
   changed in the Sheet from …8847 to …1234 on Oct 21, 2026").
 - **Name changed**: the lead pauses for review (`Needs review: name changed`). On the dashboard staff
-  choose: use the new name, keep the old name (that exact Sheet name is then remembered and never
-  flagged again), or different person (lead closed; add a new row).
+  choose: use the new name, keep the old name, or different person (lead closed; add a new row). Keep
+  the old name writes the name on file back into the Name cell, but only while the cell still shows the
+  reviewed new name; a third name typed since is left alone and reviewed as usual (2026-10-23).
 
 ## Review texts (Outcome Status)
 
