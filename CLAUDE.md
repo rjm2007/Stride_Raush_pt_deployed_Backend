@@ -57,4 +57,5 @@ Vapi, Twilio  -->  Caddy  -->  api webhooks (/api/v1/...)
 - Backend and dashboard share a contract (identity headers, response shapes, proxy allow-list): change and
   deploy them together.
 - Never put secrets in code, docs, commits or chat output.
+- Commits and PRs are the owner's (rjm2007) alone: never add a `Co-Authored-By: Claude` line, a "Generated with Claude Code" note or any other Claude attribution to commit messages or PR descriptions.
 - The owner prefers short, plain answers (one change per line). Hotfixes: commit to `main` and deploy.
