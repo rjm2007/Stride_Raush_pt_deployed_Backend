@@ -5,7 +5,7 @@ client). Production: the client's project `taimrfktweamsnbbatux` (Singapore, ap-
 
 | Path | Purpose |
 | --- | --- |
-| `migrations/NNN_name.sql` | Ordered, idempotent schema changes 001 … 045 and 048, **same file names as the demo repo** (demo also has 046_keap_male_booked_tag and 047_lead_gender, not applied here yet). `rpt migrate` applies any file not yet recorded in `public.schema_migrations`, in filename order. |
+| `migrations/NNN_name.sql` | Ordered, idempotent schema changes 001 … 045, 048, 049 and 053 (`call_logs.structured_output`, 2026-11-02, same file as demo), **same file names as the demo repo** (demo also has 046_keap_male_booked_tag and 047_lead_gender, not applied here yet). `rpt migrate` applies any file not yet recorded in `public.schema_migrations`, in filename order. |
 | `seed.sql` | Fresh-sandbox seed (`rpt seed`): the `rausch-pt` practice, settings, default cadence. Local test DBs only. |
 | `dev/reset_test_lead_by_name.sql` | Used by `rpt test-lead` to replace a synthetic test lead; can only match `is_test` synthetic leads. |
 | `prod/2026-10-20_reset_before_handover.sql` | Handover reset after our final tests: removes every lead and everything linked to it, blocked numbers and logs; keeps settings (hours, holidays), cadence and templates. Guarded: stops if more than 4 leads exist. Owner's go only. |
