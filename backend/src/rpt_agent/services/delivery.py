@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 import re
+
+from psycopg.types.json import Jsonb
 
 from ..config import get_settings
 from ..db import transaction
@@ -9,7 +12,7 @@ from ..providers import ProviderClients, ProviderError
 from ..retry import retry_delay_seconds
 from ..usage_report import record_test_usage
 from ..vapi_contract import extract_vapi_context, outcome_from_ended_reason
-from .lead_status import apply_call_outcome
+from .lead_status import CALLBACK_WITHOUT_TIME, apply_call_outcome
 from .review import flag_lead_for_review
 from .sheet_sync import dashboard_call_link, enqueue_sheet_update
 
@@ -212,6 +215,14 @@ def _structured_outcome(message: dict) -> dict | None:
     return None
 
 
+def _structured_outputs(message: dict) -> dict | None:
+    """Every structured output Vapi made for the call, as sent (id -> name, result), for
+    call_logs.structured_output: staff and debugging see why a cut call moved the lead."""
+    artifact = message.get("artifact") if isinstance(message.get("artifact"), dict) else {}
+    outputs = artifact.get("structuredOutputs")
+    return outputs if isinstance(outputs, dict) and outputs else None
+
+
 def _call_text_artifacts(message: dict) -> tuple[str | None, str | None]:
     artifact = message.get("artifact") if isinstance(message.get("artifact"), dict) else {}
     analysis = message.get("analysis") if isinstance(message.get("analysis"), dict) else {}
@@ -287,6 +298,185 @@ def _words(text: str) -> set[str]:
     return set(re.findall(r"[a-z]+", text.lower()))
 
 
+# Stored reason for `callback_no_time` (owner, 2026-10-28; demo 08beb3f).
+CALLBACK_NO_TIME_REASON = "Patient asked to be called later, no time given"
+
+# A reply made only of these words is a plain "no" ("No.", "Nope", "No. Bye.").
+_BARE_NO = frozenset({"no", "nope", "nah"})
+_BARE_NO_FILLER = frozenset({"uh", "um", "oh", "sorry", "bye", "goodbye", "thanks", "thank", "you"})
+
+
+def _refusal_words(sentence: str) -> str:
+    # "No, thanks." -> "no thanks"; "don't" -> "dont".
+    return re.sub(r"[^a-z]+", " ", sentence.lower().replace("’", "").replace("'", "")).strip()
+
+
+# A "wrong_person" from the post-call summary is accepted only when the person said so themselves,
+# in answer to "Am I speaking with ...?", and never said they were the patient (owner, 2026-10-28;
+# ported from demo 08beb3f, e66e687, 90c350e, 84f0f72). Demo call 648: "Yes." then "No." over the
+# greeting, then a hang-up; call 650: "Hello?" then a hang-up. Both were read as wrong person and
+# the leads were closed as Wrong number. Production 28 Oct: "Hi" then silence was paused as wrong
+# person the same way.
+WRONG_PERSON_PHRASES = (
+    "wrong number", "wrong person", "wrong phone", "not me", "not him", "not her", "thats not",
+    "this isnt", "this is not", "no one by that name", "nobody by that name", "no one here by",
+    "nobody here by", "no one named", "nobody named", "no such person", "never heard of",
+    r"(?:dont|do not) know (?:who|any|that|him|her|them)", "not the patient",
+    r"(?:doesnt|does not|dont|do not) live here", "you have the wrong", "youve got the wrong",
+    "you got the wrong", "have the wrong", "got the wrong", "the wrong one", r"there(?:s| is) no \w+ here",
+    "just got this number", r"(?:dont|do not) know (?:a|an)",
+)
+# A family member or someone who knows the patient is not a wrong number (owner, 2026-10-28):
+# "She's not home", "I'm her mom", "Can I take a message?" keep the cadence going.
+_FAMILY = re.compile(
+    r"\b(?:mom|mother|dad|father|wife|husband|son|daughter|sister|brother|grandma|grandmother|"
+    r"grandpa|grandfather|aunt|uncle|niece|nephew|partner|girlfriend|boyfriend|take a message|"
+    r"call (?:her|him) back)\b"
+)
+# Words a family member uses, but a stranger too ("Wrong number, I'm at work"): they keep the cadence
+# going only when the same reply has no plain wrong-number phrase (demo night QA, 2026-10-29).
+_FAMILY_SOFT = re.compile(r"\b(?:not home|not here|not available|not in|at work|sleeping|busy)\b")
+_WRONG_PERSON = re.compile(r"\b(?:" + "|".join(p.replace(" ", r"\s+") for p in WRONG_PERSON_PHRASES)
+                           + r")\b")
+# "No, this is Maria." / "Nope, not Jordan. This is Mike.": a no, then another name.
+_OTHER_NAME = re.compile(
+    r"\b(?:no|nope|nah)\b(?: \w+){0,3} (?:this is|my name is) (?!(?:she|he|me|her|him|it|not|the|a|an|"
+    r"fine|good|ok|okay|just|really|actually|about|for|what|who|why)\b)[a-z]+"
+)
+_IDENTITY_QUESTION = re.compile(r"speaking (?:with|to)|is this|are you")
+# A clear "I am the patient". A bare "Yes" is weaker: people answer the phone with "Yes?" and talk over
+# the greeting (648), so it never outweighs a clear "wrong number" (owner, 2026-10-29).
+_CLEAR_PATIENT = re.compile(r"\b(?:speaking|thats me|its me|this is me|this is (?:she|he)|thats right|"
+                            r"correct|(?:yes|yeah|yep) (?:this is|it is|its|i am|im))\b")
+_BARE_YES = frozenset({"yes", "yeah", "yep", "yup"})
+_YES_FILLER = frozenset({"uh", "um", "oh", "hi", "hello", "hey", "mm", "hmm", "sure", "ok", "okay"})
+_NAME_STOP = frozenset({"am", "i", "is", "this", "speaking", "with", "to", "are", "you", "hi", "hello",
+                        "hey", "please", "the", "a", "mr", "mrs", "ms", "miss", "dr", "there"})
+
+
+def _asked_names(question: str) -> set[str]:
+    """The name the agent asked for: "Hi, am I speaking with Jordan Lee?" -> {"jordan", "lee"}."""
+    match = re.search(r"(?:speaking (?:with|to)|is this|are you)\s+([^?.!,]+)", question.lower())
+    return set(_refusal_words(match.group(1)).split()) - _NAME_STOP if match else set()
+
+
+def _patient_said_wrong_person(message: dict) -> bool:
+    """Whether the person on the call said they are not the patient (or it is a wrong number) in answer
+    to the agent's "Am I speaking with ...?" (owner, 2026-10-29):
+    1. Anything said before that question ("Hello?", "Yes?") is a greeting and is ignored; so is a
+       "Yes?" asked back.
+    2. A clear statement beats a bare word: "wrong number" / "this is Maria" is the wrong person even
+       after a bare "Yes"; "Speaking" / "Yes, this is Jordan" is the patient, nothing after it changes that.
+    3. A bare "No" counts only as the direct answer to the question (or to the agent asking the name
+       again), with no "Yes" before it (648).
+    4. A family member keeps the cadence going.
+    A wrong person only pauses the lead with a Wrong number card, so staff make the final call when the
+    call contradicts itself ("Yeah..." then "wrong number")."""
+    turns = _call_turns(message)
+    question = next((i for i, (role, words) in enumerate(turns)
+                     if role == "bot" and _IDENTITY_QUESTION.search(words.lower())), None)
+    if question is None:
+        return False
+    names = _asked_names(turns[question][1])
+    alternatives = "|".join(sorted(re.escape(name) for name in names))
+    own_name = re.compile(r"\b(?:this is|its|im|i am|yes|yeah|yep) (?:" + alternatives + r")\b"
+                          ) if names else None
+    # "No, I'm not Jordan." / "Jordan? No, no Jordan here."
+    not_name = re.compile(r"\b(?:(?:im|i am|this is|its) not (?:" + alternatives + r")|no (?:" + alternatives
+                          + r") here)\b") if names else None
+    last_bot = asking = question
+    said_yes = False
+    said_wrong = False
+    for i, (role, reply) in enumerate(turns):
+        if i <= question:
+            continue  # rule 1: greetings before the question
+        if role == "bot":
+            if reply.strip():
+                last_bot = i
+                if _IDENTITY_QUESTION.search(reply.lower()) and _asked_names(reply) & names:
+                    asking = i  # the agent asked the name again ("Sorry, is this Jordan?")
+            continue
+        if role != "user" or not reply.strip():
+            continue
+        text = _refusal_words(reply)
+        if _FAMILY.search(text) or (_FAMILY_SOFT.search(text) and not _WRONG_PERSON.search(text)):
+            return False
+        if said_wrong:
+            continue  # "Yes, bye" after "wrong number" is not a confirmation
+        if _OTHER_NAME.search(text) and not (own_name and own_name.search(text)):
+            said_wrong = True
+            continue
+        for sentence, mark in re.findall(r"([^.?!]+)([.?!]*)", reply):
+            words = _refusal_words(sentence)
+            if not words:
+                continue
+            if _WRONG_PERSON.search(words) or (not_name and not_name.search(words)):
+                said_wrong = True
+                break
+            if "?" in mark:
+                continue  # "Yes?", "Who am I speaking with?": asked back, not an answer
+            if _CLEAR_PATIENT.search(words) or (own_name and own_name.search(words)):
+                return False
+            bare = set(words.split())
+            if bare & _BARE_YES and bare <= _BARE_YES | _YES_FILLER:
+                said_yes = True
+            elif (last_bot == asking and not said_yes and bare & _BARE_NO
+                  and bare <= _BARE_NO | _BARE_NO_FILLER):
+                said_wrong = True  # a plain "No." to "Am I speaking with ...?"
+                break
+    return said_wrong
+
+
+# Statuses that say the patient was put through to staff.
+_TRANSFER_STATUSES = frozenset({"transferred_human", "transferred", "booking_link_and_transfer"})
+
+
+def _call_tool_calls(message: dict) -> list[dict]:
+    """Every tool call made on the call, as {"name", "type", "arguments"}, from the report's
+    messages (role "tool_calls" / "tool_call_result") and the OpenAI-formatted copy."""
+    artifact = message.get("artifact") if isinstance(message.get("artifact"), dict) else {}
+    found: list[dict] = []
+    for items in (artifact.get("messages"), message.get("messages"),
+                  artifact.get("messagesOpenAIFormatted")):
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            if item.get("role") == "tool_call_result":
+                found.append({"name": str(item.get("name") or ""), "type": "", "arguments": {}})
+            for call in item.get("toolCalls") or item.get("tool_calls") or []:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function") if isinstance(call.get("function"), dict) else {}
+                arguments = function.get("arguments")
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except ValueError:
+                        arguments = {}
+                found.append({"name": str(function.get("name") or call.get("name") or ""),
+                              "type": str(call.get("type") or ""),
+                              "arguments": arguments if isinstance(arguments, dict) else {}})
+    return found
+
+
+def _call_transferred(message: dict, ended_reason: str) -> bool:
+    """Whether the call was really handed to staff: Vapi ended it as forwarded / during a transfer
+    ("assistant-forwarded-call", "customer-ended-call-during-transfer", "...-transfer-failed"), or a
+    transfer tool ran (Vapi's transferCall type, our "transfer_tool_outreach")."""
+    reason = ended_reason.strip().lower()
+    if reason == "assistant-forwarded-call" or "transfer" in reason:
+        return True
+    return any("transfer" in call["name"].lower() or call["type"] == "transferCall"
+               for call in _call_tool_calls(message))
+
+
+def _booking_link_requested(message: dict) -> bool:
+    """Whether the agent asked for the booking link text on the call (update_lead_status with a
+    booking_link status)."""
+    return any(str(call["arguments"].get("status") or "").startswith("booking_link")
+               for call in _call_tool_calls(message))
+
+
 def _settle_from_structured_output(
     trace: WorkflowTrace, message: dict, *, lead_id: str, event_id: int, call_id: str
 ) -> str | None:
@@ -315,9 +505,12 @@ def _settle_from_structured_output(
         return "manual"
     # The extractor is told a hang-up is not a refusal and that any wording of
     # "stop contacting me" is do_not_contact, so its judgement is applied as-is.
-    # No status means the patient never decided: count it as a missed contact
-    # and keep the cadence going - only the patient can end outreach.
-    status = str(result.get("status") or "").strip() or "no_answer"
+    # No status, or "no_decision" (outcome v2, 2026-11-02), means the patient never decided
+    # (silence, a cut call, a family member, a call screener): count it as a missed contact and keep
+    # the cadence going - only the patient can end outreach.
+    status = str(result.get("status") or "").strip().lower() or "no_answer"
+    if status == "no_decision":
+        status = "no_answer"
     summary_note = str(result.get("summary") or "")
     # The extractor is told silence is not a refusal, but it runs on a model Vapi
     # picks (Gemini, whatever we pin) and has still called silence "declined".
@@ -325,11 +518,28 @@ def _settle_from_structured_output(
     # transcript shows or does not - an AI's reading of it is not enough.
     answered = (
         _patient_replied_after(message, introduction=True)
-        if status == "declined"
+        if status in {"declined", "not_interested"}
         else _patient_replied_after(message, introduction=False)
-        if status in {"do_not_contact", "call_opt_out"}
+        # already_booked closes the lead like a decline: it needs the patient's own words too.
+        if status in {"do_not_contact", "call_opt_out", "already_booked"}
+        # "manual" is report_lead_status's old name for wrong_person.
+        else _patient_said_wrong_person(message)
+        if status in {"wrong_person", "manual"}
         else True
     )
+    # A transfer from the summary needs a transfer on the call (owner, 2026-10-27; demo 12d9500).
+    # Demo call 01a17ce0: "Yes." / "Yep. Yes. Yes.", then a hang-up; no transfer tool ran, Vapi said
+    # customer-ended-call, yet the summary said "transferred to a team member" and the lead left the
+    # cadence as "Call transferred". "Link and transfer" without a transfer keeps the link only if the
+    # agent asked for it on the call.
+    call = message.get("call") if isinstance(message.get("call"), dict) else {}
+    ended = str(message.get("endedReason") or call.get("endedReason") or "")
+    if status in _TRANSFER_STATUSES and not _call_transferred(message, ended):
+        trace.log("fallback_transfer_without_transfer", event_id=event_id, extracted=status)
+        if status == "booking_link_and_transfer" and _booking_link_requested(message):
+            status = "booking_link"
+        else:
+            answered = False
     if not answered:
         trace.log("fallback_refusal_without_answer", event_id=event_id, extracted=status)
         status = "no_answer"
@@ -348,14 +558,32 @@ def _settle_from_structured_output(
             source="call summary",
         )
     except (TypeError, ValueError) as exc:
+        # "Call me later" with no time: Needs Review with its own card, so the front desk decides
+        # (owner, 2026-10-28). Vapi also dropped the time on the old outcome 32053ff0.
+        no_time = status in {"callback_scheduled", "callback"} and str(exc) == CALLBACK_WITHOUT_TIME
+        reason = (CALLBACK_NO_TIME_REASON if no_time
+                  else f"structured outcome could not be applied: {exc}")
         with transaction() as conn:
+            # report_lead_status rolled back its own settle, so settle the call here with the card
+            # (demo 2d1e00e): left in_flight/attempted, the Sheet showed nothing for the call and the
+            # sweeper later added a second "Call result never arrived" card. Lead before event, as
+            # apply_call_outcome locks them.
+            conn.execute("select id from leads where id=%s for update", (lead_id,))
+            settled = conn.execute(
+                "update outreach_events set status='delivered',settled_at=now(),"
+                "settled_by='webhook',outcome='manual',failure_reason=%s,updated_at=now() "
+                "where id=%s and lead_id=%s and status in ('in_flight','attempted') "
+                "returning outcome",
+                (reason, event_id, lead_id),
+            ).fetchone()
             flag_lead_for_review(
-                conn, lead_id, f"structured outcome could not be applied: {exc}",
-                code="call_outcome_not_applied", source="call", outreach_event_id=event_id,
+                conn, lead_id, reason,
+                code="callback_no_time" if no_time else "call_outcome_not_applied",
+                source="call", outreach_event_id=event_id,
                 details={"call_id": call_id, "extracted_status": status},
             )
         trace.log("validation_failed", reason="structured_output_rejected")
-        return None
+        return settled["outcome"] if settled else None
     with transaction() as conn:
         row = conn.execute(
             "select outcome from outreach_events where id=%s", (event_id,)
@@ -425,13 +653,14 @@ def process_vapi_end_report(trace: WorkflowTrace, body: dict) -> str:
         call_log = conn.execute(
             "insert into call_logs(outreach_event_id,lead_id,vapi_call_id,dialed_at,ended_at,"
             "answer_state,ended_reason,outcome_source,transcript_text,summary_text,"
-            "duration_seconds,cost) "
+            "duration_seconds,cost,structured_output) "
             "values(%s,%s,%s,coalesce(%s::timestamptz,now()),%s::timestamptz,%s,%s,%s,%s,%s,"
             # Derive the duration rather than trusting a field: we always have both
             # timestamps, and greatest() keeps a clock skew from storing a negative.
             "coalesce(%s,greatest(extract(epoch from (%s::timestamptz - %s::timestamptz)),0))::int,"
-            "%s) "
+            "%s,%s) "
             "on conflict(vapi_call_id) do update set "
+            "structured_output=coalesce(excluded.structured_output,call_logs.structured_output),"
             "outcome_source=coalesce(call_logs.outcome_source,excluded.outcome_source),"
             "transcript_text=coalesce(excluded.transcript_text,call_logs.transcript_text),"
             "summary_text=coalesce(excluded.summary_text,call_logs.summary_text),"
@@ -453,6 +682,9 @@ def process_vapi_end_report(trace: WorkflowTrace, body: dict) -> str:
                 ended_at_raw,
                 started_at_raw,
                 call_cost,
+                # Every structured output as sent (migration 053), so staff can see why a cut call
+                # moved the lead.
+                Jsonb(outputs) if (outputs := _structured_outputs(message)) else None,
             ),
         ).fetchone()
         settings = get_settings()

@@ -37,6 +37,8 @@ GROUP_OF = {
     "wrong_person": "call",
     "call_no_outcome": "call",
     "call_outcome_not_applied": "call",
+    # "Call me later" with no time, then the call ended (owner, 2026-10-28).
+    "callback_no_time": "call",
     "unrecognized_status": "call",
     "call_failed": "technical",
     "dispatch_failed": "technical",
@@ -68,6 +70,7 @@ TITLES = {
     "wrong_person": "Wrong person or wrong number",
     "call_no_outcome": "Call answered, no outcome",
     "call_outcome_not_applied": "Call outcome could not be applied",
+    "callback_no_time": "Asked to be called later, no time given",
     "unrecognized_status": "Unknown call result",
     "call_failed": "Call could not be placed",
     "dispatch_failed": "Call or text could not be sent",
@@ -105,6 +108,19 @@ GROUP_CHOICES = {
     "blocked": ["front_desk"],
     "other": ["continue", "front_desk"],
 }
+
+# A card whose choices are not its group's. Asked to be called later, then the call ended
+# (owner, 2026-10-29): the number is not in doubt, so only continue the cadence or the front desk.
+CODE_CHOICES = {
+    "callback_no_time": ["continue", "front_desk"],
+}
+CODE_CHOICE_LABELS = {("callback_no_time", "continue"): "Continue cadence"}
+
+
+def choice_label(choice: str, code: str | None = None) -> str:
+    """A choice in staff words, as the card with this code names it."""
+    return CODE_CHOICE_LABELS.get((code, choice)) or CHOICE_LABELS.get(choice, choice)
+
 
 RESUME_CHOICES = {"use_new_name", "keep_old_name", "calls_only", "retry_texts", "number_ok", "continue"}
 # Closed for good: the number (or the person) on this lead is wrong. Staff add a new Sheet row.
@@ -145,6 +161,8 @@ def sheet_open_status(code: str | None, details: dict | None) -> str:
         return "Needs review: text failed (landline)" if landline else "Needs review: text failed"
     if code == "wrong_person":
         return "Needs review: wrong number"
+    if code == "callback_no_time":
+        return "Needs review: asked to be called later, no time given"
     if group == "call":
         return "Needs review: call result unclear"
     if group == "technical":
@@ -291,6 +309,9 @@ def _plain_reason(row: dict, lead: dict) -> str:
         return f"{base} Agent's note: {note}" if note else base
     if code == "call_no_outcome":
         return "The call was answered, but the agent reported no outcome. Read the transcript."
+    if code == "callback_no_time":
+        return ("The patient asked to be called later but gave no time, and the call ended. Read the "
+                "transcript, then continue the cadence or have the front desk call them.")
     if code == "call_outcome_not_applied":
         return "The call summary gave an outcome the system could not apply. Read the transcript."
     if code == "unrecognized_status":
@@ -355,7 +376,7 @@ def describe(row: dict, lead: dict, *, has_calls: bool = False) -> dict[str, Any
     group = group_of(code)
     failure = sms_failure(details.get("error_code")) if group == "text" else None
     choices = [
-        choice for choice in GROUP_CHOICES[group]
+        choice for choice in CODE_CHOICES.get(code, GROUP_CHOICES[group])
         if not (choice == "retry_texts" and failure and failure["permanent"])
         # A pre-048 name review never recorded the new name, so there is nothing to "use".
         and not (choice == "use_new_name" and not details.get("new_name"))
@@ -375,7 +396,7 @@ def describe(row: dict, lead: dict, *, has_calls: bool = False) -> dict[str, Any
         "landline": bool(failure and failure["landline"]),
         "transcript_url": f"/leads/{lead_id}/conversations/calls"
         if group == "call" and has_calls else None,
-        "options": [{"choice": choice, "label": CHOICE_LABELS[choice]} for choice in choices],
+        "options": [{"choice": choice, "label": choice_label(choice, code)} for choice in choices],
     }
 
 
@@ -749,7 +770,7 @@ def resolve_review(
     if choice not in CHOICE_LABELS:
         raise ReviewError(422, "Unknown choice.")
     if choice not in allowed:
-        raise ReviewError(409, f"“{CHOICE_LABELS[choice]}” is not an option for this review.")
+        raise ReviewError(409, f"“{choice_label(choice)}” is not an option for this review.")
     details = rows[0].get("details") or {}
     if choice == "keep_old_name" and not details.get("new_name"):
         details = _legacy_sheet_name(conn, lead, rows[0])
@@ -784,7 +805,7 @@ def resolve_review(
     new = conn.execute("select status,cadence_state from leads where id=%s", (lead_id,)).fetchone()
     record_status(
         conn, lead_id, lead["status"], new["status"], "dashboard",
-        (f"Review resolved by {actor_name}: {CHOICE_LABELS[choice]}"
+        (f"Review resolved by {actor_name}: {choice_label(choice, primary['code'])}"
          + (f". Note: {note}" if note else ""))[:500],
     )
     enqueue_sheet_update(
@@ -800,7 +821,7 @@ def resolve_review(
     return {
         "status": "resolved",
         "choice": choice,
-        "label": CHOICE_LABELS[choice],
+        "label": choice_label(choice, primary["code"]),
         "lead_status": new["status"],
         "cadence_state": new["cadence_state"],
         **result,
