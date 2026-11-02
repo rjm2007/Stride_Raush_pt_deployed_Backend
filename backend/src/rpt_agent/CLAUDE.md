@@ -27,5 +27,6 @@ Top-level modules. HTTP lives in `routes/`, business workflows in `services/`, t
 - `get_settings()` is cached (`@cache`); restart processes after `.env` changes.
 - The practice DB row (`practice_settings`) overrides some `.env` values: `vapi_assistant_id`,
   `vapi_phone_number_id`, `booking_link_url` (the link the agent texts), business hours, daily caps.
-- The outreach agent's prompt reads `{{Patient_name}}`, `{{call_attempt}}` and `{{lead_id}}`; `dispatch_job`
+- The outreach agent's prompt reads `{{Patient_name}}`, `{{call_attempt}}` and `{{lead_id}}` (and, from
+  2026-11-02, `{{front_desk_open}}` "yes"/"no", `services/front_desk.py`); `dispatch_job`
   sends exactly the variables in `tests/test_worker.py::test_call_sends_the_variables_the_outreach_agent_reads`.

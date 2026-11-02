@@ -24,6 +24,8 @@ then `rpt migrate` and `rpt seed` with `SUPABASE_DB_URL` set to the same local U
 | `test_google_sheet.py`, `test_sheet_direct.py`, `test_sheet_direct_integration.py` | Sheet sync with `fake_sheet.FakeSheet`: header mapping, moved-row safety, labels; end to end on a real schema |
 | `test_number_block_integration.py` | Block / unblock a number end to end |
 | `test_delivery.py`, `test_unspoken_call.py`, `test_last_decision.py` | Vapi end-of-call settlement, outcomes, booking-link text |
+| `test_outcome_v2.py`, `test_outcome_v2_integration.py` | After-call outcome v2: no_decision / missing status, already_booked, wrong person only if said (family, "Yes?" greeting, contradictions), transfer only if real, callback with no time card, structured output stored; Sheet "Declined on the call" / already booked |
+| `test_front_desk.py` | Front desk open now per clinic, holidays, 10-minute margin (`front_desk_open` call variable) |
 | `test_review_pause.py`, `test_callback_timing.py` | Review/pause behaviour, callback scheduling |
 | `test_lead_review.py`, `test_lead_review_integration.py` | Review codes/choices/Sheet words; every group's choices end to end, no Resume/board shortcut, history, phone change closes, calls only never texts; Booked / Do Not Contact / Restart typed on a flagged Sheet row; keep old name writes the old name back (no new review, no sync loop, a third name is kept) |
 | `test_security.py` | Dashboard headers, Vapi/Twilio auth |

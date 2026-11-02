@@ -247,3 +247,30 @@ the worker sent nothing while the page said "Pause cadence". Nothing recorded wh
 - `delivery._patient_replied_after(introduction=True)` needs a reply after the introduction that is more
   than agreement or filler (`_AGREEMENT_WORDS`): "Yes", "Sure", then a hang-up is no longer applied as
   declined from the call summary (becomes no_answer, outreach continues). "No." still counts.
+
+### 2026-11-02 — After-call outcome v2, wrong-person check, front_desk_open (port of demo 08beb3f, e66e687, 90c350e, 84f0f72, 12d9500, 2d1e00e, db7b5f9)
+Spec: `../../demo/Structured-Output-Review.md`. Only `delivery._settle_from_structured_output` (answered call,
+the agent's tool never reported) changed how a call is decided.
+- `no_decision` (new) or no status: `no_answer`, cadence continues, summary kept as the note. The old outcome
+  (32053ff0) keeps working: same status names, missing status as before.
+- `already_booked` (new): `report_lead_status` closes the lead without a migration: status `declined`, cadence
+  `terminated`, outcome `not_interested`, `status_reason = ALREADY_BOOKED_REASON`. Dashboard card/Activity and
+  Sheet (Outcome Status "Closed: already booked or already a patient", Call Outcome "Already booked or a
+  patient") name it. Needs a patient reply after the agent's first line, else `no_answer`.
+- `wrong_person` (old name `manual`): only if `_patient_said_wrong_person` — after "Am I speaking with ...?"
+  the person said a wrong-person phrase ("No, this is Maria", "There's no X here", "I'm not X", "I just got
+  this number") or a bare "No" straight to the (repeated) question; greetings before the question and "Yes?"
+  asked back are ignored; a clear wrong number beats a bare yes (contradiction → paused with the Wrong number
+  card); "Speaking / that's me / yes, this is X" is the patient; a family member keeps the cadence going.
+  Production 28 Oct ("Hi" then silence paused as wrong person) is a test. Replaces branch `fix/wrong-person-guard`.
+- `transferred_human` / `booking_link_and_transfer` only if a transfer really happened (forwarded / transfer
+  ended reason, or a transfer tool call); otherwise `no_answer` (link kept if the agent asked for it).
+- A callback with no time: card `callback_no_time` "Asked to be called later, no time given", choices only
+  "Continue cadence" / "Front desk will handle" (`CODE_CHOICES`). A rejected outcome now settles the call with
+  its card (no second "Call result never arrived" card).
+- Declined on a call: Sheet Outcome Status "Declined on the call" (was left at "Cadence started"); Action emptied.
+- Every structured output is stored in `call_logs.structured_output` (migration 053, same file as demo).
+- `services/front_desk.py` + worker: every call sends `front_desk_open` "yes"/"no" (front desk hours per clinic:
+  Laguna Niguel and Dana Point Mon–Fri 7–19, Sat 7–13:30; Mission Viejo Mon–Fri 7–17; unknown = Laguna Niguel;
+  clinic holidays from `practice_settings.holidays`; "no" in the last 10 minutes). For the agent's
+  "Want me to connect you now?" offer.

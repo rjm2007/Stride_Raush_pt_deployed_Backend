@@ -97,6 +97,7 @@ was chosen. No new columns: only the words in the existing cells. Lead Status ke
 | `Needs review: text failed (landline)` / `Needs review: text failed` | a cadence text was not delivered (Twilio 30006/21614 = landline) |
 | `Needs review: wrong number` | the person on the call said it is the wrong number or not the patient |
 | `Needs review: call result unclear` | call answered with no usable outcome |
+| `Needs review: asked to be called later, no time given` | the patient asked for a callback but gave no time, then the call ended (2026-11-02) |
 | `Needs review: not confirmed` | a call or text whose result never came back (never retried automatically) |
 | `Number blocked; needs review` | the number is on the blocked list |
 | `Resolved: new name used` / `Resolved: old name kept` | name review resolved, cadence continues |
@@ -106,6 +107,8 @@ was chosen. No new columns: only the words in the existing cells. Lead Status ke
 | `Closed: wrong number` / `Closed: different person, add a new row` | lead closed for good |
 | `Phone changed: add a new row` | phone edited in the Sheet (see above) |
 | `Closed: a newer row has this phone number` | a newer row with the same phone took over (one lead per phone number) |
+| `Declined on the call` | the patient said no on a call; Action is emptied (2026-11-02) |
+| `Closed: already booked or already a patient` | the patient said on a call they already booked or are already a patient; Call Outcome `Already booked or a patient`; Action is emptied (2026-11-02) |
 
 A row in review (Outcome Status `Needs review: …` or `Number blocked; needs review`, 2026-10-23):
 
