@@ -28,6 +28,7 @@ from ..services.lead_review import (
     resolve_review,
 )
 from ..services.lead_stage import stage_of as _stage
+from ..services.lead_status import ALREADY_BOOKED_REASON
 from ..services.number_block import (
     NumberBlockError,
     block_number,
@@ -190,6 +191,8 @@ def _closed_reason(row: dict) -> str:
         return "Replaced: a newer Sheet row has this phone number"
     if reason == FRONT_DESK_REASON:
         return FRONT_DESK_REASON
+    if reason == ALREADY_BOOKED_REASON and row["status"] == "declined":
+        return ALREADY_BOOKED_REASON
     if row["status"] == "invalid_phone" and row.get("cadence_state") == "terminated":
         if reason.startswith("Phone number changed"):
             return "Phone changed: add a new row"
@@ -428,7 +431,11 @@ def _build_activity(audits, events, status_history, reviews=()) -> list[dict]:
             actor_type="automation",
             actor_name="Automation",
             category="cadence",
-            title="Lead status updated",
+            # Closed as "already booked / already a patient" (2026-10-29): the status alone says
+            # declined, so the line names the reason.
+            title=("Closed: already booked or already a patient"
+                   if str(row.get("reason") or "").startswith(ALREADY_BOOKED_REASON)
+                   else "Lead status updated"),
             details={"from": row.get("from_status"), "to": row.get("to_status")},
         ))
     return sorted(
