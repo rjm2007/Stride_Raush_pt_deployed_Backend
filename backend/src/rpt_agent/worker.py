@@ -63,6 +63,8 @@ class Job:
     vapi_assistant_id: str | None
     vapi_phone_number_id: str | None
     attempt_no: int = 1
+    # "yes" / "no": the agent offers a live transfer only while the front desk is open (2026-10-29).
+    front_desk_open: str = "no"
 
 
 @dataclass(frozen=True)
@@ -333,6 +335,8 @@ from due where oe.id=due.id
 
 
 def claim_jobs(trace: WorkflowTrace, limit: int = 20) -> list[Job]:
+    from .services.front_desk import front_desk_open_word  # local: services import the worker
+
     trace.log("database_operation_started", operation="claim_due_events")
     with transaction() as conn:
         # Migration 025 permits only workers that identify with this claim protocol.
@@ -345,7 +349,7 @@ def claim_jobs(trace: WorkflowTrace, limit: int = 20) -> list[Job]:
         for row in rows:
             context = conn.execute(
                 "select l.full_name,l.phone_e164,ps.vapi_assistant_id,ps.vapi_phone_number_id,"
-                "ps.booking_link_url,mt.body "
+                "ps.booking_link_url,mt.body,l.location,ps.holidays "
                 "from leads l "
                 "join practice_settings ps on ps.practice_id=l.practice_id "
                 "left join message_templates mt on mt.cadence_step_id=%s and mt.is_active "
@@ -359,6 +363,8 @@ def claim_jobs(trace: WorkflowTrace, limit: int = 20) -> list[Job]:
                 get_settings().testing_vapi_phone_number_id()
                 or context["vapi_phone_number_id"] or get_settings().vapi_phone_number_id,
                 row["attempt_no"],
+                # Claimed and dialled in the same tick, so "now" is the moment of the call.
+                front_desk_open=front_desk_open_word(context["location"], holidays=context.get("holidays")),
             ))
     trace.log("database_operation_completed", operation="claim_due_events", job_count=len(jobs))
     return jobs
@@ -388,6 +394,9 @@ def dispatch_job(trace: WorkflowTrace, job: Job, providers: ProviderClients) -> 
                     "Patient_name": job.name, "call_attempt": str(job.attempt_no),
                     "lead_id": job.lead_id, "outreach_event_id": str(job.event_id), "patient_name": job.name,
                     "booking_link": job.booking_link_url or "", "day_offset": job.day_offset,
+                    # Offer a live transfer only when "yes" (front desk hours of the lead's clinic,
+                    # services/front_desk.py); "no" = say the front desk will call them.
+                    "front_desk_open": job.front_desk_open,
                 }},
             })
         else:

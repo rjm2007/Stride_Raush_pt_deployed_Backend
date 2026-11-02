@@ -368,8 +368,34 @@ def test_call_sends_the_variables_the_outreach_agent_reads():
         "Patient_name": "Test Patient", "call_attempt": "2", "lead_id": "lead-7",
         "outreach_event_id": "7", "patient_name": "Test Patient",
         "booking_link": "https://book.example.test", "day_offset": 0,
+        # The agent offers "Want me to connect you now?" only when "yes" (2026-11-02); default "no".
+        "front_desk_open": "no",
     }
     assert (sent["assistantId"], sent["phoneNumberId"]) == ("assistant", "phone")
+
+
+def test_call_sends_whether_the_front_desk_is_open():
+    job = Job(8, "lead-8", "call", "+15555550123", "Test Patient", None, None, 0,
+              "assistant", "phone", front_desk_open="yes")
+    sent = {}
+
+    class Provider:
+        def create_vapi_call(self, trace, payload):
+            sent.update(payload)
+            return "vapi-call-8"
+
+    dispatch_job(WorkflowTrace("worker", "test"), job, Provider())
+    assert sent["assistantOverrides"]["variableValues"]["front_desk_open"] == "yes"
+
+
+def test_claim_reads_the_lead_clinic_and_holidays_for_the_front_desk():
+    import inspect
+
+    from rpt_agent import worker
+
+    source = inspect.getsource(worker.claim_jobs)
+    assert "l.location" in source and "ps.holidays" in source
+    assert "front_desk_open=front_desk_open_word(" in source
 
 
 def test_testing_mode_vapi_number_wins_over_the_database_setting():
