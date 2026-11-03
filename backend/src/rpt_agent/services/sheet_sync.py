@@ -199,6 +199,9 @@ def format_cadence_columns(
 DASHBOARD_OUTCOMES = {
     "cadence_restarted_after_unblock": ("Cadence restarted", "In cadence", "Restart cadence"),
     "cadence_resumed_after_unblock": ("Cadence resumed in dashboard", "In cadence", "Start cadence"),
+    # A closed lead moved back on the board (2026-11-03): Continue, or New = restart from Day 0.
+    "cadence_continued": ("Cadence continued in dashboard", None, "Start cadence"),
+    "cadence_restarted_from_board": ("Cadence restarted", None, "Restart cadence"),
     "number_unblocked": ("Unblocked in dashboard", None, None),
 }
 

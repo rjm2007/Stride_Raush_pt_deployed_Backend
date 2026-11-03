@@ -22,6 +22,7 @@ then `rpt migrate` and `rpt seed` with `SUPABASE_DB_URL` set to the same local U
 | `test_dashboard.py` | Dashboard API: roles, board stages, cadence versions, activity feed, delete, no lead create |
 | `test_lead_actions.py`, `test_lead_actions_integration.py` | Sheet commands (start/restart/DNC/booked, cooldown, Already booked), profile sync, Sheet snapshots, row model |
 | `test_google_sheet.py`, `test_sheet_direct.py`, `test_sheet_direct_integration.py` | Sheet sync with `fake_sheet.FakeSheet`: header mapping, moved-row safety, labels; end to end on a real schema |
+| `test_lead_reopen_integration.py` | A closed lead continues where it stopped (stays open after the sweep, Sheet words), only allowed channels, nothing left → Restart, refusals |
 | `test_number_block_integration.py` | Block / unblock a number end to end |
 | `test_delivery.py`, `test_unspoken_call.py`, `test_last_decision.py` | Vapi end-of-call settlement, outcomes, booking-link text |
 | `test_outcome_v2.py`, `test_outcome_v2_integration.py` | After-call outcome v2: no_decision / missing status, already_booked, wrong person only if said (family, "Yes?" greeting, contradictions), transfer only if real, callback with no time card, structured output stored; Sheet "Declined on the call" / already booked |

@@ -75,6 +75,10 @@ Deploy: see `../Deployment-AWS-EC2.md` (server, `docker compose`, `.env`).
   or a callback does **not** stop it.
 - **Pause** skips remaining planned events; **resume** restores and shifts them. **Restart** re-plans from
   Day 0 (Sheet restarts have a 10-minute cooldown).
+- **Closed lead back in cadence** (2026-11-03, `services/lead_reopen.py`): board In cadence or the lead page's
+  Continue cadence puts back the steps closing skipped (first one now, old gaps kept); Restart cadence = New.
+  Refused for Do Not Contact, blocked number, wrong number / phone changed, replaced, another active lead on
+  the phone, or nothing left. Date Of Birth is optional on the Sheet.
 - **Suppression**: `suppressed_numbers` is per phone number; the worker skips any number on it. Admins can
   unblock from the dashboard (`services/number_block.py`).
 - **Kill switch**: `OUTBOUND_ENABLED=false` stops every call and text (worker and provider layer).

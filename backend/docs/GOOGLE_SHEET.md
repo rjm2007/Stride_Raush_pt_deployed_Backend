@@ -18,7 +18,7 @@ and `src/rpt_agent/services/sheet_direct.py` (rules and labels).
 | `Name` | staff | yes | first and last name |
 | `Phone Number` | staff | yes | 10 digits = US (+1); 12 digits starting 91 = India (+91, team tests) |
 | `Email` | staff | no | |
-| `Date Of Birth` | staff | for Start | DD/MM/YYYY, a date cell, or "Mar 5, 1990"; day first when ambiguous |
+| `Date Of Birth` | staff | optional | DD/MM/YYYY, a date cell, or "Mar 5, 1990"; day first when ambiguous |
 | `Location` | staff | for Start | clinic name, e.g. Laguna Niguel |
 | `Case` | staff | for Start | free text, e.g. Ortho, Pelvic ("Ortho" = "Physical Therapy" by case aliases) |
 | `Action` | staff | yes | dropdown: `Start cadence`, `Restart cadence`, `Do Not Contact`, `Booked` |
@@ -63,7 +63,11 @@ After the last cadence step with no booking the lead moves to Closed.
 not to be contacted). The lead is created in Needs Attention; an admin unblocks it on the lead's page
 (continue or start over). A number whose lead was deleted is unblocked from Administration → Blocked numbers.
 
-`Already booked` (no call): the same phone + name + birthday + case was marked Booked in the last 30 days.
+`Already booked` (no call): the same phone + name + birthday + case was marked Booked in the last 30 days. A blank birthday on either side is not compared.
+
+`Cadence continued in dashboard` / `Cadence restarted`: staff put a closed lead back in cadence on the dashboard
+(Continue cadence = from where it stopped; Restart cadence or the board's New = from Day 0). Action is set to
+`Start cadence` / `Restart cadence`, which never runs again on a linked row.
 A different case (booked for Ortho, referred again for Pelvic) starts a new lead.
 
 ## When a row is missing

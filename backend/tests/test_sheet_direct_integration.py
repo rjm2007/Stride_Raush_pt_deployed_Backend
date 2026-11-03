@@ -127,15 +127,29 @@ def test_a_start_row_creates_the_lead_and_the_sheet_shows_it(env):
     assert len(env.leads()) == 1 and len(env.sheet.writes) == writes
 
 
-def test_an_invalid_row_shows_why_and_runs_once_staff_fix_it(env):
+def test_a_row_without_a_date_of_birth_starts_the_cadence(env):
+    """2026-11-03: Date Of Birth is optional; the lead is stored without one."""
     number = env.start_row(date_of_birth="")
     env.tick()
+    assert env.cell(number, "outcome_status") == "Cadence started"
+    lead = env.lead(env.cell(number, "lead_id"))
+    assert lead["date_of_birth"] is None and lead["cadence_state"] == "active"
+    # A date added later is picked up by the profile sync.
+    env.sheet.set(number, "date_of_birth", "16/01/1990")
+    env.tick()
+    env.tick()
+    assert str(env.lead(lead["id"])["date_of_birth"]) == "1990-01-16"
+
+
+def test_an_invalid_row_shows_why_and_runs_once_staff_fix_it(env):
+    number = env.start_row(case="")
+    env.tick()
     assert env.cell(number, "outcome_status") == (
-        "Error: Date Of Birth is required")
+        "Error: Case is required")
     assert env.cell(number, "action_request_id") == "" and env.leads() == []
     env.tick()
     assert env.leads() == []  # an Error is not retried by itself
-    env.sheet.set(number, "date_of_birth", "16/01/1990")
+    env.sheet.set(number, "case", "Ortho")
     env.sheet.set(number, "outcome_status", "")
     env.tick()
     assert env.cell(number, "outcome_status") == "Cadence started" and len(env.leads()) == 1

@@ -271,8 +271,9 @@ def build_action(row: SheetRow, action: str) -> tuple[Any | None, str | None]:
     if action != "start_cadence" and not lead_id:
         errors.append("Lead ID is required")
     if action == "start_cadence":
-        for key, column in (("name", "Name"), ("date_of_birth", "Date Of Birth"),
-                            ("location", "Location"), ("case", "Case")):
+        # Date Of Birth is optional (client, 2026-11-03): some referrals arrive without one, and
+        # staff were typing made-up dates to get past this check. Nothing here needs it.
+        for key, column in (("name", "Name"), ("location", "Location"), ("case", "Case")):
             if not row.get(key):
                 errors.append(f"{column} is required")
         if row.get("date_of_birth") and not dob:

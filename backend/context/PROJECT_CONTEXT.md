@@ -274,3 +274,23 @@ the agent's tool never reported) changed how a call is decided.
   Laguna Niguel and Dana Point Mon–Fri 7–19, Sat 7–13:30; Mission Viejo Mon–Fri 7–17; unknown = Laguna Niguel;
   clinic holidays from `practice_settings.holidays`; "no" in the last 10 minutes). For the agent's
   "Want me to connect you now?" offer.
+
+### 2026-11-03 — Closed lead back in cadence; Date Of Birth optional
+- Incident 2026-11-02: a patient said "not a good time", the old after-call outcome closed her as declined,
+  and moving the card back to In cadence only flipped the status: nothing was planned, so the spent-cadence
+  sweep (`run_safety_checks`) closed her again within a minute (four tries).
+- `services/lead_reopen.py`: a closed lead (declined, closed from the board or by the front desk, finished)
+  dropped on In cadence continues where it stopped: the skipped, never-sent steps after the last step that ran
+  come back, the first one now and the rest at their old gaps. No callback, no step a newer referral took
+  over, no channel the patient opted out of or staff turned off. Refused (409, plain reason) for Do Not
+  Contact, a blocked number, wrong number / phone changed, a replaced lead, another active lead on the phone,
+  a call or text still awaiting its result, or nothing left (then Restart).
+- Lead page (closed lead): Continue cadence and Restart cadence buttons (`lead.reopen` in `GET /leads/{id}`:
+  can_continue, continue_refusal, steps_left, can_restart). Restart = the board's New, unchanged.
+- The Sheet hears both at once: "Cadence continued in dashboard" (Action `Start cadence`) and "Cadence
+  restarted" (Action `Restart cadence`); before, a board restart reached the Sheet only after the first call.
+- Date Of Birth is optional for Start cadence (client: referrals without one; staff were typing made-up dates).
+  Removed from `sheet_direct.build_action` and `LeadActionRequest`; a date added later is applied by the
+  profile sync; "Already booked" already skips a blank DOB.
+- Tests: `test_lead_reopen_integration.py` (4), DOB tests in `test_sheet_direct*.py`. 637 pass on a local
+  Postgres; dashboard typecheck, lint, 39 tests and build pass; checked in a browser on a local stack.

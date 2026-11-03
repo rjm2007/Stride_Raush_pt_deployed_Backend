@@ -72,9 +72,9 @@ class LeadActionRequest(BaseModel):
     @model_validator(mode="after")
     def fields_for_action(self):
         if self.action == "start_cadence":
+            # Date Of Birth is optional (client, 2026-11-03), as in sheet_direct.build_action.
             required = {
                 "full_name": self.lead.full_name,
-                "date_of_birth": self.lead.date_of_birth,
                 "location": self.lead.location,
                 "title": self.lead.title or self.lead.lead_type,
             }

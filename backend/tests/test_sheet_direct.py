@@ -117,7 +117,18 @@ def test_a_start_row_is_validated_like_the_n8n_intake():
     row = _row(name="Asha Rao", phone="555", action="Start cadence", location="Dana Point")
     request, error = build_action(row, "start_cadence")
     assert request is None
-    assert error == "invalid phone number; Date Of Birth is required; Case is required"
+    assert error == "invalid phone number; Case is required"
+
+
+def test_a_start_row_without_a_date_of_birth_is_accepted():
+    """2026-11-03: some referrals have no DOB, and staff were typing made-up dates to start them."""
+    row = _row(name="Asha Rao", phone="(555) 555-0101", location="Dana Point", case="Ortho",
+               action="Start cadence")
+    request, error = build_action(row, "start_cadence")
+    assert error is None and request.lead.date_of_birth is None
+    bad = _row(name="Asha Rao", phone="(555) 555-0101", location="Dana Point", case="Ortho",
+               date_of_birth="next tuesday", action="Start cadence")
+    assert build_action(bad, "start_cadence")[1] == "Date Of Birth must be DD/MM/YYYY"
 
 
 def test_a_valid_start_row_builds_the_same_request_as_the_api():

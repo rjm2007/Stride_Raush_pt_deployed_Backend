@@ -13,6 +13,12 @@ from ..config import get_settings
 from ..db import transaction
 from ..observability import WorkflowTrace
 from ..security import DashboardActor, require_dashboard_auth
+from ..services.lead_reopen import (
+    ReopenError,
+    continue_closed_lead,
+    continue_refusal,
+    remaining_steps,
+)
 from ..services.lead_review import (
     CHOICE_LABELS,
     FRONT_DESK_REASON,
@@ -27,6 +33,7 @@ from ..services.lead_review import (
     resolution_label,
     resolve_review,
 )
+from ..services.lead_stage import CLOSED_STATUSES
 from ..services.lead_stage import stage_of as _stage
 from ..services.lead_status import ALREADY_BOOKED_REASON
 from ..services.number_block import (
@@ -766,8 +773,20 @@ def dashboard_lead(lead_id: UUID, actor: Actor):
             (lead_id,),
         ).fetchall()
         review = lead_review_summary(conn, row) if row["needs_review"] else None
+        reopen = None
+        if not row["needs_review"] and (
+                row["status"] in CLOSED_STATUSES or row["cadence_state"] in {"completed", "terminated"}):
+            # A closed lead's page offers Continue (where it stopped) and Restart (Day 0).
+            refusal = continue_refusal(conn, row)
+            reopen = {
+                "can_continue": refusal is None,
+                "continue_refusal": refusal,
+                "steps_left": len(remaining_steps(conn, row)),
+                "can_restart": row["status"] != "do_not_contact" and not closed_for_good(conn, row),
+            }
     detail = dict(row)
     detail["review"] = review
+    detail["reopen"] = reopen
     detail["texts_off"] = bool(row.get("sms_disabled"))
     detail["id"] = str(detail["id"])
     detail["display_id"] = f"RPT-{str(row['id']).split('-')[0].upper()}"
@@ -1070,8 +1089,8 @@ def move_lead_stage(lead_id: UUID, payload: StageMove, actor: Actor):
     """
     with transaction() as conn:
         lead = conn.execute(
-            "select id,practice_id,status,cadence_state,needs_review,call_opt_out,sms_opt_out "
-            "from leads where id=%s for update",
+            "select id,practice_id,status,status_reason,cadence_state,needs_review,phone_e164,"
+            "call_opt_out,sms_opt_out,sms_disabled from leads where id=%s for update",
             (lead_id,),
         ).fetchone()
         if not lead:
@@ -1121,6 +1140,19 @@ def move_lead_stage(lead_id: UUID, payload: StageMove, actor: Actor):
             hand_over_number(
                 conn, practice_id=lead["practice_id"], phone=phone, lead_id=str(lead_id)
             )
+            # The Sheet shows the restart now, not after the first call (it kept "Closed").
+            enqueue_sheet_update(
+                conn, lead_id=str(lead_id), event_type="cadence_restarted_from_board",
+                source_key=f"{lead_id}:{uuid4().hex}",
+            )
+        elif payload.stage == "cadence" and (
+                lead["status"] in CLOSED_STATUSES or lead["cadence_state"] in {"completed", "terminated"}):
+            # A closed lead continues where it stopped. Flipping its status alone planned nothing,
+            # and the spent-cadence sweep closed it again within a minute (production 2026-11-02).
+            try:
+                restarted = continue_closed_lead(conn, lead)
+            except ReopenError as exc:
+                raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         elif payload.stage == "cadence":
             conn.execute(
                 "update leads set status='in_progress',cadence_state='active',needs_review=false,"
