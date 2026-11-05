@@ -25,8 +25,8 @@ and `src/rpt_agent/services/sheet_direct.py` (rules and labels).
 | `Lead Status` | backend | | the dashboard column: New / In cadence / Paused / Needs Review / Booked / Do not outreach / Closed. If the cell has a dropdown, it must list all seven, or Google marks the value as invalid. Closed = 14 days done with no booking, patient not interested, or wrong number |
 | `Cadence Day` | backend | | |
 | `Outcome Status` | backend | yes | result of the last command (see below). Clear it to run a command again |
-| `Call Outcome` | backend | | |
-| `Message Outcome` | backend | | |
+| `Call Outcome` | backend | | result of the newest call (any day), not only the Cadence Day's |
+| `Message Outcome` | backend | | result of the newest text (any day) |
 | `Email Outcome` | backend | | |
 | `Transcript Link` | backend | | link to the lead's calls in the dashboard |
 | `Action Request ID` | backend | yes | do not edit |

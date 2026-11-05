@@ -298,7 +298,7 @@ class _SnapshotConnection:
             })
         if "select oe.day_offset" in query:
             return _Rows(one={"day_offset": 0, "finished_at": datetime.now(UTC)})
-        if "select oe.id,oe.channel" in query:
+        if "select oe.id,oe.channel" in query or "select distinct on (oe.channel)" in query:
             return _Rows(many=[
                 {
                     "id": 1,
@@ -319,6 +319,14 @@ class _CallbackSnapshotConnection(_SnapshotConnection):
     def execute(self, query, params=None):
         if "select oe.day_offset" in query:
             return _Rows(one={"day_offset": None, "finished_at": datetime.now(UTC)})
+        if "select distinct on (oe.channel)" in query:
+            return _Rows(many=[{
+                "id": 9,
+                "channel": "call",
+                "status": "delivered",
+                "outcome": "not_interested",
+                "delivery_status": None,
+            }])
         if "select oe.id,oe.channel" in query:
             assert "is not distinct from" in query, query
             return _Rows(many=[{
@@ -341,6 +349,37 @@ def test_callback_call_reaches_the_sheet():
     )
     assert snapshot["sheet"]["cadence_day"] == "Callback"
     assert snapshot["sheet"]["call_outcome"] == "Answered - declined"
+
+
+class _TextOnlyDaySnapshotConnection(_SnapshotConnection):
+    """Day 1 is a text only; the last call was on Day 0."""
+
+    def execute(self, query, params=None):
+        if "select oe.day_offset" in query:
+            return _Rows(one={"day_offset": 1, "finished_at": datetime.now(UTC)})
+        if "select oe.id,oe.channel" in query:
+            return _Rows(many=[{"id": 3, "channel": "sms", "status": "delivered",
+                                "outcome": None, "delivery_status": "delivered"}])
+        if "select distinct on (oe.channel)" in query:
+            return _Rows(many=[
+                {"id": 1, "channel": "call", "status": "delivered", "outcome": "no_answer",
+                 "delivery_status": None},
+                {"id": 3, "channel": "sms", "status": "delivered", "outcome": None,
+                 "delivery_status": "delivered"},
+            ])
+        return super().execute(query, params)
+
+
+def test_text_only_day_keeps_the_last_call_outcome():
+    """Production 2026-11-06: on a text-only day (1, 9, 13) Call Outcome was written blank, so the
+    client saw called leads with no call result. It now shows the newest call of the run."""
+    sheet = build_sheet_snapshot(
+        _TextOnlyDaySnapshotConnection(), "00000000-0000-0000-0000-000000000002"
+    )["sheet"]
+    assert sheet["cadence_day"] == "Day 1"
+    assert sheet["cadence"] == "SMS"
+    assert sheet["call_outcome"] == "No answer"
+    assert sheet["message_outcome"] == "Delivered"
 
 
 class _BookedSnapshotConnection(_SnapshotConnection):

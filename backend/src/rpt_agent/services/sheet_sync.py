@@ -326,6 +326,24 @@ def build_sheet_snapshot(
         (lead_id, run_started_at, run_started_at),
     ).fetchone()
 
+    # Call Outcome / Message Outcome show the newest call and text of this run, whatever day they
+    # were on. Taken from the latest day only, a text-only day (1, 9, 13) blanked the call result
+    # (client, production 2026-11-06: 12 called leads showed no Call Outcome).
+    latest_by_channel = conn.execute(
+        "select distinct on (oe.channel) oe.id,oe.channel,oe.status,oe.outcome,sm.delivery_status "
+        "from outreach_events oe left join sms_messages sm on sm.outreach_event_id=oe.id "
+        "where oe.lead_id=%s "
+        "and (%s::timestamptz is null or oe.created_at>=%s::timestamptz) and ("
+        "(oe.channel='call' and oe.status in ('delivered','failed','unknown') "
+        "and oe.settled_at is not null) or "
+        "(oe.channel='sms' and (sm.delivery_status in ('sent','delivered','failed','undelivered') "
+        "or (oe.status in ('failed','unknown') and oe.settled_at is not null)))) "
+        "order by oe.channel,"
+        "coalesce(sm.delivered_at,oe.settled_at,oe.executed_at,oe.updated_at) desc nulls last,"
+        "oe.id desc",
+        (lead_id, run_started_at, run_started_at),
+    ).fetchall()
+
     events: list[dict[str, Any]] = []
     cadence_day = None
     if latest:
@@ -348,7 +366,8 @@ def build_sheet_snapshot(
             else "Callback"
         )
 
-    cadence, call_outcome, message_outcome, email_outcome = format_cadence_columns(events, lead)
+    cadence, _, _, email_outcome = format_cadence_columns(events, lead)
+    _, call_outcome, message_outcome, _ = format_cadence_columns(latest_by_channel, lead)
     _, cadence_status = format_cadence_result(events, lead)
     callback_at: str | None = None
     if isinstance(lead.get("callback_requested_at"), datetime):

@@ -275,6 +275,15 @@ the agent's tool never reported) changed how a call is decided.
   clinic holidays from `practice_settings.holidays`; "no" in the last 10 minutes). For the agent's
   "Want me to connect you now?" offer.
 
+### 2026-11-06 — Sheet Call Outcome keeps the newest call
+- Client 2026-11-06: called leads showed no Call Outcome. The snapshot took Call / Message Outcome from the
+  latest cadence day only, so a text-only day (1, 9, 13) wrote a blank over the earlier call's result (12 of
+  46 real leads at the time).
+- `build_sheet_snapshot` now takes them from the newest settled call and text of the run, whatever day;
+  Cadence Day is unchanged.
+- Tests: `test_lead_actions.py::test_text_only_day_keeps_the_last_call_outcome`,
+  `test_sheet_outcome_integration.py` (3). 641 pass on a local Postgres.
+
 ### 2026-11-03 — Closed lead back in cadence; Date Of Birth optional
 - Incident 2026-11-02: a patient said "not a good time", the old after-call outcome closed her as declined,
   and moving the card back to In cadence only flipped the status: nothing was planned, so the spent-cadence
